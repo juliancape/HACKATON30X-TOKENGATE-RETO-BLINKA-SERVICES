@@ -342,6 +342,7 @@ class Orquestador:
                 )
                 try:
                     await self.kapso.enviar_imagen(telefono, o.imagen_url, caption)
+                    log.info("imagen_enviada", opcion_id=o.opcion_id, url=o.imagen_url)
                 except Exception as exc:  # noqa: BLE001 - la imagen no debe romper la lista
                     log.warning("imagen_no_enviada", opcion_id=o.opcion_id, error=str(exc))
 
@@ -414,14 +415,20 @@ class Orquestador:
             await self.kapso.enviar_texto(telefono, "Esa opcion ya no esta disponible. Buscamos de nuevo?")
             return
 
-        # Revalidacion obligatoria contra politicas duras antes del checkout
+        # Revalidacion obligatoria contra politicas duras antes del checkout,
+        # con el TOTAL real (precio unitario * cantidad de personas)
         from app.models.purchase import OpcionProducto
 
+        requisitos = RequisitosCompra.model_validate(contexto.get("requisitos") or {})
+        cantidad = max(1, int(requisitos.cantidad_personas or 1))
+        total = int(opcion.get("precio_cop") or 0) * cantidad
         gasto_diario = self.repo.gasto_diario(telefono)
-        validacion = filtrar_aprobables([OpcionProducto.model_validate(opcion)], ContextoGasto(gasto_diario), self.settings)[0]
+        opcion_total = OpcionProducto.model_validate({**opcion, "precio_cop": total})
+        validacion = filtrar_aprobables([opcion_total], ContextoGasto(gasto_diario), self.settings)[0]
         if validacion.decision != Decision.APROBAR:
             await self.kapso.enviar_texto(
-                telefono, f"El precio cambio o ya no cumple politicas: {validacion.motivo}. Buscamos de nuevo."
+                telefono,
+                f"⚠️ El precio cambió o ya no cumple politicas: {validacion.motivo}\nBuscamos de nuevo.",
             )
             self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.NUEVA, contexto)
             return
@@ -430,7 +437,7 @@ class Orquestador:
             opcion["tienda_id"],
             opcion["producto_id"],
             opcion["producto_nombre"],
-            cantidad=1,
+            cantidad=cantidad,
             precio_cop=int(opcion.get("precio_cop") or 0),
         )
         checkout = await self.rappi.preview_checkout()
@@ -453,10 +460,14 @@ class Orquestador:
         self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.CHECKOUT_PREPARADO, contexto)
         if solicitud_id:
             self.repo.actualizar_solicitud(solicitud_id, EstadoSolicitud.CHECKOUT_PREPARADO)
-        self.repo.registrar_auditoria(conversacion_id, "checkout_preparado", {"opcion_id": opcion_id})
+        self.repo.registrar_auditoria(
+            conversacion_id, "checkout_preparado", {"opcion_id": opcion_id, "cantidad": cantidad, "total": total}
+        )
         await self.kapso.enviar_texto(
             telefono,
             "🎉 *Pedido preparado* ✅\n\n"
+            f"🍔 {cantidad} x {opcion['producto_nombre']}\n"
+            f"💰 Total: *${total:,} COP*\n\n"
             "El registro y la decision ya fueron enviados para la revision corporativa.\n"
             "🛒 Tu pedido queda listo en el carrito de Rappi.\n\n"
             "Escribe cuando quieras hacer otro pedido 🍽️",
