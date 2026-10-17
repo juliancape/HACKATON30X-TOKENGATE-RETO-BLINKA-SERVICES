@@ -24,9 +24,14 @@ class SupabaseRepo:
     def obtener_conversacion(self, conversacion_id: str) -> dict[str, Any] | None:
         """Devuelve el estado de la conversacion o None."""
         respuesta = (
-            self._client.table("conversations").select("*").eq("id", conversacion_id).maybe_single().execute()
+            self._client.table("conversations")
+            .select("*")
+            .eq("id", conversacion_id)
+            .limit(1)
+            .execute()
         )
-        return respuesta.data
+        filas = respuesta.data or []
+        return filas[0] if filas else None
 
     def guardar_conversacion(self, conversacion_id: str, estado: EstadoSolicitud, contexto: dict[str, Any]) -> None:
         """Crea o actualiza el estado de la conversacion."""

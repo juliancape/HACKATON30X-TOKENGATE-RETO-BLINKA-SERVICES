@@ -22,7 +22,7 @@ class Settings(BaseSettings):
 
     # Gemini (LLM)
     gemini_api_key: str = Field(default="")
-    gemini_model: str = Field(default="gemini-2.5-flash")
+    gemini_model: str = Field(default="gemini-3.8-flash")
 
     # Supabase
     supabase_url: str = Field(default="")
