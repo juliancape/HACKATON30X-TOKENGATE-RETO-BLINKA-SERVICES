@@ -330,8 +330,8 @@ class Orquestador:
         filas = [
             {
                 "id": f"{ID_OPCION_PREFIX}{o.opcion_id}",
-                "titulo": f"{o.producto_nombre[:20]} - {o.precio_cop} COP",
-                "descripcion": f"{o.tienda_nombre}",
+                "titulo": o.producto_nombre[:24],
+                "descripcion": f"{o.tienda_nombre[:30]} - {o.precio_cop} COP",
             }
             for o in seleccionables
         ]

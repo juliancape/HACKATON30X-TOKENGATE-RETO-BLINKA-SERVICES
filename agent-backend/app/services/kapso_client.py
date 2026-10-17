@@ -78,7 +78,19 @@ class KapsoClient:
         )
 
     async def enviar_lista(self, telefono: str, cuerpo: str, filas: list[dict[str, str]]) -> dict[str, Any]:
-        """Envia una lista interactiva: filas con {id, titulo, descripcion}."""
+        """Envia una lista interactiva: filas con {id, titulo, descripcion}.
+
+        Limites de WhatsApp: titulo de fila <= 24 chars, descripcion <= 72,
+        cuerpo <= 1024, titulo de seccion <= 24, boton <= 20, max 10 filas.
+        """
+        filas_sanitizadas = [
+            {
+                "id": f["id"][:256],
+                "title": f["titulo"][:24],
+                "description": f.get("descripcion", "")[:72],
+            }
+            for f in filas[:10]
+        ]
         return await self._post(
             {
                 "messaging_product": "whatsapp",
@@ -86,8 +98,11 @@ class KapsoClient:
                 "type": "interactive",
                 "interactive": {
                     "type": "list",
-                    "body": {"text": cuerpo},
-                    "action": {"button": "Ver opciones", "sections": [{"title": "Opciones", "rows": filas}]},
+                    "body": {"text": cuerpo[:1024]},
+                    "action": {
+                        "button": "Ver opciones"[:20],
+                        "sections": [{"title": "Opciones"[:24], "rows": filas_sanitizadas}],
+                    },
                 },
             }
         )
