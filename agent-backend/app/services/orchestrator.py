@@ -76,6 +76,8 @@ class Orquestador:
         try:
             if contenido.tipo == "flow":
                 await self._procesar_flow(conversacion_id, telefono, contenido, contexto)
+            elif contenido.boton_id and contenido.boton_id.startswith("req:"):
+                await self._manejar_confirmacion_requisitos(conversacion_id, telefono, contenido, contexto)
             elif estado in (EstadoSolicitud.NUEVA, EstadoSolicitud.RECOPILANDO_REQUISITOS):
                 await self._fase_requisitos(conversacion_id, telefono, contenido, contexto)
             elif estado == EstadoSolicitud.ESPERANDO_SELECCION:
@@ -91,6 +93,12 @@ class Orquestador:
         except (RappiError, LlmError, JevError, BillingCoreError, OrquestadorError) as exc:
             log.error("fallo_flujo", conversacion_id=conversacion_id, error=str(exc))
             self.repo.registrar_auditoria(conversacion_id, "error_flujo", {"error": str(exc)})
+            await self.kapso.enviar_texto(
+                telefono,
+                "Tuvimos un problema procesando tu solicitud. Intenta de nuevo en unos minutos.",
+            )
+        except Exception as exc:  # noqa: BLE001 - nunca dejar al empleado sin respuesta
+            log.error("fallo_inesperado", conversacion_id=conversacion_id, error=str(exc), exc_info=True)
             await self.kapso.enviar_texto(
                 telefono,
                 "Tuvimos un problema procesando tu solicitud. Intenta de nuevo en unos minutos.",
@@ -135,6 +143,19 @@ class Orquestador:
         self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.NUEVA, {})
         await self.kapso.enviar_texto(telefono, "Listo! Cuentame que quieres pedir y empezamos de nuevo.")
 
+    async def _manejar_confirmacion_requisitos(
+        self, conversacion_id: str, telefono: str, contenido: TextoEntrante, contexto: dict
+    ) -> None:
+        """Botones de confirmacion de requisitos (funciona en cualquier estado de recoleccion)."""
+        if contenido.boton_id == "req:corregir":
+            self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.NUEVA, contexto)
+            await self.kapso.enviar_texto(telefono, "OK, escribe de nuevo que necesitas.")
+            return
+        if contenido.boton_id == "req:buscar":
+            await self._buscar_y_presentar(conversacion_id, telefono, contexto)
+            return
+        await self.kapso.enviar_texto(telefono, "Elige una de las opciones con los botones, por favor.")
+
     # ------------------------------------------------------- fase requisitos
 
     async def _fase_requisitos(
@@ -165,6 +186,15 @@ class Orquestador:
             return
 
         self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.RECOPILANDO_REQUISITOS, contexto)
+        # Crear la solicitud trazable (una por conversacion) con FK a conversations
+        if not contexto.get("solicitud_id"):
+            contexto["solicitud_id"] = self.repo.crear_solicitud(
+                conversacion_id, telefono, EstadoSolicitud.RECOPILANDO_REQUISITOS
+            )
+            self.repo.actualizar_solicitud(
+                contexto["solicitud_id"], EstadoSolicitud.RECOPILANDO_REQUISITOS, requisitos.model_dump(mode="json")
+            )
+            self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.RECOPILANDO_REQUISITOS, contexto)
 
         resumen = (
             f"Entendi esto:\n- Que: {requisitos.descripcion}\n"
@@ -203,11 +233,20 @@ class Orquestador:
         contexto_gasto = ContextoGasto(gasto_diario_cop=gasto_diario)
         evaluaciones = filtrar_aprobables(opciones, contexto_gasto, self.settings)
 
-        # Jev evalua el contexto completo (historico de precios + politicas)
+        # Jev solo sobre las candidatas que ya pasaron las politicas duras,
+        # con tope para no disparar cientos de preguntas atomicas.
+        LIMITE_CANDIDATAS_JEV = 12
+        opciones_por_id = {o.opcion_id: o for o in opciones}
+        candidatas = [e for e in evaluaciones if e.decision == Decision.APROBAR][:LIMITE_CANDIDATAS_JEV]
         historico = self.repo.historico_precios(requisitos.descripcion)
         politicas = self.repo.politicas()
         try:
-            evaluaciones_jev = await self.jev.evaluar(requisitos.descripcion, opciones, historico, politicas)
+            evaluaciones_jev = await self.jev.evaluar(
+                requisitos.descripcion,
+                [opciones_por_id[e.opcion_id] for e in candidatas],
+                historico,
+                politicas,
+            )
             # Fusion: si Jev no aprueba una opcion, tampoco se presenta
             no_aprobadas_jev = {e.opcion_id for e in evaluaciones_jev if e.decision != Decision.APROBAR}
             for e in evaluaciones:
@@ -220,7 +259,6 @@ class Orquestador:
             log.warning("jev_no_disponible_continua_con_politicas", error=str(exc))
             self.repo.registrar_auditoria(conversacion_id, "jev_no_disponible", {"error": str(exc)})
 
-        opciones_por_id = {o.opcion_id: o for o in opciones}
         seleccionables = mejores_opciones(evaluaciones, opciones_por_id, cantidad=3)
         self.repo.guardar_decisiones(contexto.get("solicitud_id", conversacion_id), evaluaciones)
         self.repo.registrar_auditoria(
