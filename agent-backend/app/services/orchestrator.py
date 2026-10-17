@@ -10,7 +10,6 @@ Estados:
 """
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 
 from app.config import Settings, get_settings
@@ -475,37 +474,7 @@ class Orquestador:
             "🎉 *Pedido preparado* ✅\n\n"
             f"🍔 {cantidad} x {opcion['producto_nombre']}\n"
             f"💰 Total: *${total:,} COP*\n\n"
-            "Tu solicitud fue enviada para revision corporativa. "
-            "Te aviso por aqui en cuanto tengamos la decision.\n"
+            "Tu solicitud fue enviada para revision corporativa.\n"
             "🛒 Tu pedido queda listo en el carrito de Rappi.\n\n"
             "Escribe cuando quieras hacer otro pedido 🍽️",
         )
-        # Monitorear la review del pagador en background y avisar al empleado
-        asyncio.create_task(self._esperar_review(solicitud_id, conversacion_id, telefono))
-
-    async def _esperar_review(self, subject_id: str, conversacion_id: str, telefono: str) -> None:
-        """Consulta pagador_reviews en background y notifica la decision al empleado.
-
-        El sistema pagador es quien aprueba/rechaza/pide info; el agente solo
-        observa y comunica. Encuesta cada 10s hasta 3 minutos.
-        """
-        mensajes = {
-            "approved": "✅ *Tu pedido fue APROBADO* por la revision corporativa. Ya puedes continuar desde el carrito de Rappi.",
-            "rejected": "❌ *Tu pedido fue RECHAZADO* en la revision corporativa. Si quieres, hacemos otra busqueda.",
-            "info_requested": "ℹ️ La revision corporativa pide *mas informacion* sobre tu pedido. Te contactaran por este canal.",
-        }
-        for _ in range(18):  # 18 x 10s = 3 minutos
-            await asyncio.sleep(10)
-            try:
-                review = await asyncio.to_thread(self.repo.ultima_review, subject_id)
-            except Exception as exc:  # noqa: BLE001 - el polling nunca debe tumbar nada
-                log.warning("review_poll_fallo", error=str(exc))
-                continue
-            if review:
-                accion = str(review.get("action", ""))
-                self.repo.registrar_auditoria(
-                    conversacion_id, "review_pagador", {"action": accion, "subject_id": subject_id}
-                )
-                await self.kapso.enviar_texto(telefono, mensajes.get(accion, f"Decision de revision: {accion}"))
-                return
-        log.info("review_sin_respuesta", subject_id=subject_id)
