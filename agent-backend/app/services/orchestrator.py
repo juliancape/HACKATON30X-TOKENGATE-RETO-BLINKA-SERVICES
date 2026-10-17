@@ -86,10 +86,11 @@ class Orquestador:
                 await self._fase_requisitos(conversacion_id, telefono, contenido, contexto)
             elif estado == EstadoSolicitud.ESPERANDO_SELECCION:
                 await self._fase_seleccion(conversacion_id, telefono, contenido, contexto)
-            elif estado == EstadoSolicitud.CHECKOUT_PREPARADO:
-                await self.kapso.enviar_texto(telefono, "El pedido ya esta preparado en checkout. Sin pago ejecutado.")
-            elif estado == EstadoSolicitud.COMPLETADA:
-                await self._reiniciar(conversacion_id, telefono)
+            elif estado in (EstadoSolicitud.CHECKOUT_PREPARADO, EstadoSolicitud.COMPLETADA):
+                # Nuevo pedido: conservamos memoria pero limpiamos el pedido anterior
+                contexto.pop("opciones_presentadas", None)
+                self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.NUEVA, contexto)
+                await self._fase_requisitos(conversacion_id, telefono, contenido, contexto)
             else:
                 await self.kapso.enviar_texto(
                     telefono, "Tu solicitud esta en revision o escalada. Te avisaremos por este canal."
@@ -183,7 +184,7 @@ class Orquestador:
             await self.kapso.enviar_texto(
                 telefono,
                 "Hola! Soy el agente de compras corporativas: busco opciones reales en Rappi y preparo "
-                "tu pedido segun las politicas de la empresa (sin pago).\n\n"
+                "tu pedido segun las politicas de la empresa.\n\n"
                 "Para buscarte bien dime:\n"
                 "1. Que quieres comer o comprar\n"
                 "2. Para cuantas personas\n"
@@ -455,7 +456,8 @@ class Orquestador:
         self.repo.registrar_auditoria(conversacion_id, "checkout_preparado", {"opcion_id": opcion_id})
         await self.kapso.enviar_texto(
             telefono,
-            "🎉 *Pedido preparado hasta checkout (sin pago)*\n\n"
-            "✅ Registro y decision enviados al core de facturacion\n"
-            "🛒 El pedido queda listo en tu carrito de Rappi para la revision corporativa",
+            "🎉 *Pedido preparado* ✅\n\n"
+            "El registro y la decision ya fueron enviados para la revision corporativa.\n"
+            "🛒 Tu pedido queda listo en el carrito de Rappi.\n\n"
+            "Escribe cuando quieras hacer otro pedido 🍽️",
         )
