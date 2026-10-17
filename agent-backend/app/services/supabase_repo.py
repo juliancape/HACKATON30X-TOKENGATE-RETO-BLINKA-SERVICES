@@ -74,6 +74,57 @@ class SupabaseRepo:
         filas = [e.model_dump(mode="json") | {"solicitud_id": solicitud_id} for e in evaluaciones]
         self._client.table("decisions").insert(filas).execute()
 
+    # ---------------- Sistema pagador (core de facturacion) ----------------
+
+    def insertar_subject_compra(
+        self,
+        subject_id: str,
+        org_id: str,
+        referencia: str,
+        total_cop: int,
+        payload: dict[str, Any],
+    ) -> None:
+        """Inserta la compra como subject del sistema pagador.
+
+        Usa pagador_save_writes (service_role) para respetar el contrato del
+        sistema: subjects, audit. Las reviews las escribe el pagador.
+        """
+        ahora = datetime.now(timezone.utc).isoformat()
+        writes = {
+            "subjects": [
+                {
+                    "id": subject_id,
+                    "kind": "purchase",
+                    "reference": referencia,
+                    "receivedAt": ahora,
+                    "amount": {"amountMinor": int(total_cop), "currency": "COP"},
+                    "payload": payload,
+                }
+            ],
+            "audit": [
+                {
+                    "id": f"audit_{subject_id}",
+                    "type": "purchase_prepared",
+                    "at": ahora,
+                    "payload": payload,
+                }
+            ],
+        }
+        self._client.rpc("pagador_save_writes", {"p_org": org_id, "p_writes": writes}).execute()
+
+    def ultima_review(self, subject_id: str) -> dict[str, Any] | None:
+        """Ultima review del sistema pagador para un subject, o None."""
+        respuesta = (
+            self._client.table("pagador_reviews")
+            .select("action, at, payload")
+            .eq("subject_id", subject_id)
+            .order("at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        filas = respuesta.data or []
+        return filas[0] if filas else None
+
     # ---------------- Datos para Jev ----------------
 
     def historico_precios(self, texto_producto: str, limite: int = 30) -> list[dict[str, Any]]:

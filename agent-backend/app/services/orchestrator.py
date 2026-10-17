@@ -10,6 +10,7 @@ Estados:
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 from app.config import Settings, get_settings
@@ -17,7 +18,6 @@ from app.domain.policies import filtrar_por_presupuesto, mejores_opciones, valid
 from app.logging_setup import get_logger
 from app.models.kapso import TextoEntrante
 from app.models.purchase import Decision, EstadoSolicitud, RequisitosCompra
-from app.services.billing_client import BillingCoreClient, BillingCoreError
 from app.services.jev_client import JevClient, JevError
 from app.services.kapso_client import KapsoClient
 from app.services.llm_service import GeminiService, LlmError
@@ -54,7 +54,6 @@ class Orquestador:
         self.rappi = RappiClient()
         self.repo = SupabaseRepo()
         self.jev = JevClient()
-        self.billing = BillingCoreClient()
 
     async def cerrar(self) -> None:
         """Cierra los clientes HTTP."""
@@ -62,7 +61,6 @@ class Orquestador:
         await self.llm.close()
         await self.rappi.close()
         await self.jev.close()
-        await self.billing.close()
 
     # ------------------------------------------------------------------ utils
 
@@ -95,7 +93,7 @@ class Orquestador:
                 await self.kapso.enviar_texto(
                     telefono, "Tu solicitud esta en revision o escalada. Te avisaremos por este canal."
                 )
-        except (RappiError, LlmError, JevError, BillingCoreError, OrquestadorError) as exc:
+        except (RappiError, LlmError, JevError, OrquestadorError) as exc:
             log.error("fallo_flujo", conversacion_id=conversacion_id, error=str(exc))
             self.repo.registrar_auditoria(conversacion_id, "error_flujo", {"error": str(exc)})
             # Recuperar la conversacion a un estado accionable; el contexto se conserva
@@ -286,18 +284,16 @@ class Orquestador:
                 historico,
                 politicas,
             )
-            # Fusion: Jev puede degradar una aprobacion a escalar; y en todos
-            # los casos propagamos su veredicto (confianza, precio) al motivo.
+            # Jev es solo un filtro de calidad y ranking: ya no decide aprobaciones.
+            # La aprobacion/rechazo/escala la hace el sistema pagador (pagador_reviews).
             por_id_jev = {e.opcion_id: e for e in evaluaciones_jev}
             for e in evaluaciones:
                 jev = por_id_jev.get(e.opcion_id)
                 if jev is None:
                     continue
-                if e.decision == Decision.APROBAR and jev.decision != Decision.APROBAR:
-                    e.decision = Decision.ESCALAR
-                    e.motivo = f"Escalada por Jev: {jev.motivo}"
-                elif e.decision == Decision.APROBAR:
-                    e.motivo = jev.motivo
+                if e.decision == Decision.APROBAR and jev.decision == Decision.RECHAZAR:
+                    e.decision = Decision.RECHAZAR
+                e.motivo = jev.motivo
         except JevError as exc:
             log.warning("jev_no_disponible_continua_con_politicas", error=str(exc))
             self.repo.registrar_auditoria(conversacion_id, "jev_no_disponible", {"error": str(exc)})
@@ -322,9 +318,10 @@ class Orquestador:
         if not seleccionables:
             await self.kapso.enviar_texto(
                 telefono,
-                "Ninguna opcion cumple las politicas corporativas. Tu solicitud quedo registrada como escalada.",
+                "😕 Ninguna opcion entra en tu presupuesto o paso el filtro de calidad. "
+                "Prueba con otro producto o un presupuesto mayor.",
             )
-            self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.ESCALADA, contexto)
+            self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.NUEVA, contexto)
             return
 
         mensaje = await self.llm.redactar_presentacion(
@@ -441,24 +438,35 @@ class Orquestador:
         )
         checkout = await self.rappi.preview_checkout()
 
-        solicitud_id = contexto.get("solicitud_id")
+        solicitud_id = contexto.get("solicitud_id") or conversacion_id
         registro = {
-            "solicitud_id": solicitud_id or conversacion_id,
             "conversacion_id": conversacion_id,
             "telefono_empleado": telefono,
             "opcion_elegida": opcion,
+            "cantidad": cantidad,
             "carrito": carrito,
             "checkout_preview": checkout,
-            "decision": "aprobada",
             "estado": "checkout_preparado",
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        if self.billing.configurado:
-            await self.billing.enviar_registro(registro)
+        # Insertar la compra como subject del sistema pagador (blinka):
+        # el core de facturacion es quien aprueba/rechaza via pagador_reviews.
+        org_id = self.settings.pagador_org_id
+        try:
+            self.repo.insertar_subject_compra(
+                subject_id=solicitud_id,
+                org_id=org_id,
+                referencia=f"compra-{conversacion_id[:8]}",
+                total_cop=total,
+                payload=registro,
+            )
+        except Exception as exc:  # noqa: BLE001 - el insert al pagador no debe tumbar el flujo
+            log.error("pagador_insert_fallo", error=str(exc))
+            self.repo.registrar_auditoria(conversacion_id, "pagador_insert_fallo", {"error": str(exc)})
 
         self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.CHECKOUT_PREPARADO, contexto)
-        if solicitud_id:
-            self.repo.actualizar_solicitud(solicitud_id, EstadoSolicitud.CHECKOUT_PREPARADO)
+        if contexto.get("solicitud_id"):
+            self.repo.actualizar_solicitud(contexto["solicitud_id"], EstadoSolicitud.CHECKOUT_PREPARADO)
         self.repo.registrar_auditoria(
             conversacion_id, "checkout_preparado", {"opcion_id": opcion_id, "cantidad": cantidad, "total": total}
         )
@@ -467,7 +475,37 @@ class Orquestador:
             "🎉 *Pedido preparado* ✅\n\n"
             f"🍔 {cantidad} x {opcion['producto_nombre']}\n"
             f"💰 Total: *${total:,} COP*\n\n"
-            "El registro y la decision ya fueron enviados para la revision corporativa.\n"
+            "Tu solicitud fue enviada para revision corporativa. "
+            "Te aviso por aqui en cuanto tengamos la decision.\n"
             "🛒 Tu pedido queda listo en el carrito de Rappi.\n\n"
             "Escribe cuando quieras hacer otro pedido 🍽️",
         )
+        # Monitorear la review del pagador en background y avisar al empleado
+        asyncio.create_task(self._esperar_review(solicitud_id, conversacion_id, telefono))
+
+    async def _esperar_review(self, subject_id: str, conversacion_id: str, telefono: str) -> None:
+        """Consulta pagador_reviews en background y notifica la decision al empleado.
+
+        El sistema pagador es quien aprueba/rechaza/pide info; el agente solo
+        observa y comunica. Encuesta cada 10s hasta 3 minutos.
+        """
+        mensajes = {
+            "approved": "✅ *Tu pedido fue APROBADO* por la revision corporativa. Ya puedes continuar desde el carrito de Rappi.",
+            "rejected": "❌ *Tu pedido fue RECHAZADO* en la revision corporativa. Si quieres, hacemos otra busqueda.",
+            "info_requested": "ℹ️ La revision corporativa pide *mas informacion* sobre tu pedido. Te contactaran por este canal.",
+        }
+        for _ in range(18):  # 18 x 10s = 3 minutos
+            await asyncio.sleep(10)
+            try:
+                review = await asyncio.to_thread(self.repo.ultima_review, subject_id)
+            except Exception as exc:  # noqa: BLE001 - el polling nunca debe tumbar nada
+                log.warning("review_poll_fallo", error=str(exc))
+                continue
+            if review:
+                accion = str(review.get("action", ""))
+                self.repo.registrar_auditoria(
+                    conversacion_id, "review_pagador", {"action": accion, "subject_id": subject_id}
+                )
+                await self.kapso.enviar_texto(telefono, mensajes.get(accion, f"Decision de revision: {accion}"))
+                return
+        log.info("review_sin_respuesta", subject_id=subject_id)

@@ -2,7 +2,6 @@
 from fastapi import APIRouter
 
 from app.config import get_settings
-from app.services.billing_client import BillingCoreClient
 from app.services.jev_client import JevClient
 
 router = APIRouter()
@@ -22,6 +21,6 @@ async def health() -> dict:
             "supabase": bool(settings.supabase_url and settings.supabase_service_key),
             "rappi": settings.rappi_api_base_url,
             "jev": JevClient().configurado,
-            "billing_core": BillingCoreClient().configurado,
+            "pagador_org_id": get_settings().pagador_org_id,
         },
     }

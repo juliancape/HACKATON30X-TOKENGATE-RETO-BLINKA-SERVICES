@@ -39,9 +39,8 @@ class Settings(BaseSettings):
     # WhatsApp Flow de requisitos (requiere numero de produccion; vacio = deshabilitado)
     kapso_flow_id_requisitos: str = Field(default="")
 
-    # Core de facturacion
-    billing_core_base_url: str = Field(default="")
-    billing_core_api_key: str = Field(default="")
+    # Sistema pagador (core de facturacion, esquema pagador_*)
+    pagador_org_id: str = Field(default="demo")
 
     def validate_required(self) -> list[str]:
         """Devuelve la lista de variables obligatorias que faltan."""
