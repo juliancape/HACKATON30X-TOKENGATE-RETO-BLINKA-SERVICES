@@ -47,6 +47,7 @@ class OpcionProducto(BaseModel):
     precio_cop: int
     tiempo_entrega_min: int | None = None
     calificacion: float | None = None
+    imagen_url: str | None = None
 
 
 class ResultadoEvaluacion(BaseModel):

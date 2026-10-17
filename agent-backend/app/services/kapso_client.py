@@ -107,6 +107,17 @@ class KapsoClient:
             }
         )
 
+    async def enviar_imagen(self, telefono: str, url: str, caption: str = "") -> dict[str, Any]:
+        """Envia una imagen con caption (max 1024 chars)."""
+        return await self._post(
+            {
+                "messaging_product": "whatsapp",
+                "to": telefono,
+                "type": "image",
+                "image": {"link": url, "caption": caption[:1024]},
+            }
+        )
+
     async def enviar_flow(self, telefono: str, flow_id: str, cuerpo: str, cta: str, datos: dict | None = None) -> dict[str, Any]:
         """Envia un WhatsApp Flow (formulario nativo) navegable a una pantalla.
 

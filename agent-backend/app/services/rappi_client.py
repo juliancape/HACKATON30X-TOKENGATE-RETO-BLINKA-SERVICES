@@ -127,6 +127,7 @@ class RappiClient:
                         precio_cop=int(p.get("price") or 0),
                         tiempo_entrega_min=tienda.get("eta_value"),
                         calificacion=tienda.get("store_rating_score"),
+                        imagen_url=f"https://images.rappi.com/products/{p['image']}" if p.get("image") else None,
                     )
                 )
         return opciones

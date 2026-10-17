@@ -233,13 +233,12 @@ class Orquestador:
 
         await self.kapso.enviar_botones(
             telefono,
-            f"Entendi esto:\n- Que: {requisitos.descripcion}\n"
-            f"- Personas: {requisitos.cantidad_personas}\n"
-            f"- Presupuesto: {requisitos.presupuesto_maximo_cop} COP\n"
-            f"- Restricciones: {', '.join(requisitos.restricciones) or 'ninguna'}",
+            f"📋 *Entendi esto:*\n🍔 {requisitos.descripcion}\n👥 {requisitos.cantidad_personas} persona(s)\n"
+            f"💰 Máximo *${requisitos.presupuesto_maximo_cop:,} COP*\n"
+            f"⚠️ Restricciones: {', '.join(requisitos.restricciones) or 'ninguna'}",
             [
-                {"id": "req:buscar", "titulo": "Buscar opciones"},
-                {"id": "req:corregir", "titulo": "Corregir datos"},
+                {"id": "req:buscar", "titulo": "🔎 Buscar opciones"},
+                {"id": "req:corregir", "titulo": "✏️ Corregir datos"},
             ],
         )
         self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.RECOPILANDO_REQUISITOS, contexto)
@@ -286,14 +285,18 @@ class Orquestador:
                 historico,
                 politicas,
             )
-            # Fusion: si Jev no aprueba una opcion, tampoco se presenta
-            no_aprobadas_jev = {e.opcion_id for e in evaluaciones_jev if e.decision != Decision.APROBAR}
+            # Fusion: Jev puede degradar una aprobacion a escalar; y en todos
+            # los casos propagamos su veredicto (confianza, precio) al motivo.
+            por_id_jev = {e.opcion_id: e for e in evaluaciones_jev}
             for e in evaluaciones:
-                if e.opcion_id in no_aprobadas_jev and e.decision == Decision.APROBAR:
+                jev = por_id_jev.get(e.opcion_id)
+                if jev is None:
+                    continue
+                if e.decision == Decision.APROBAR and jev.decision != Decision.APROBAR:
                     e.decision = Decision.ESCALAR
-                    e.motivo = "Escala sugerida por Jev: " + next(
-                        (j.motivo for j in evaluaciones_jev if j.opcion_id == e.opcion_id), "sin motivo"
-                    )
+                    e.motivo = f"Escalada por Jev: {jev.motivo}"
+                elif e.decision == Decision.APROBAR:
+                    e.motivo = jev.motivo
         except JevError as exc:
             log.warning("jev_no_disponible_continua_con_politicas", error=str(exc))
             self.repo.registrar_auditoria(conversacion_id, "jev_no_disponible", {"error": str(exc)})
@@ -327,16 +330,30 @@ class Orquestador:
             contexto.get("solicitud_texto", requisitos.descripcion),
             [o.model_dump() for o in seleccionables],
         )
+        # Imagenes de producto con caption formateado (una por opcion)
+        for i, o in enumerate(seleccionables, start=1):
+            if o.imagen_url:
+                caption = (
+                    f"*{i}. {o.producto_nombre}*\n"
+                    f"🏪 {o.tienda_nombre}\n"
+                    f"💰 *${o.precio_cop:,} COP*"
+                    + (f"\n⏱ {o.tiempo_entrega_min} min" if o.tiempo_entrega_min else "")
+                )
+                try:
+                    await self.kapso.enviar_imagen(telefono, o.imagen_url, caption)
+                except Exception as exc:  # noqa: BLE001 - la imagen no debe romper la lista
+                    log.warning("imagen_no_enviada", opcion_id=o.opcion_id, error=str(exc))
+
         filas = [
             {
                 "id": f"{ID_OPCION_PREFIX}{o.opcion_id}",
-                "titulo": o.producto_nombre[:24],
-                "descripcion": f"{o.tienda_nombre[:30]} - {o.precio_cop} COP",
+                "titulo": f"{i}. {o.producto_nombre[:20]}",
+                "descripcion": f"${o.precio_cop:,} COP - {o.tienda_nombre[:40]}",
             }
-            for o in seleccionables
+            for i, o in enumerate(seleccionables, start=1)
         ]
         filas.append({"id": ID_RECHAZO, "titulo": "Ninguna me convence", "descripcion": "Buscar otras opciones"})
-        await self.kapso.enviar_lista(telefono, mensaje, filas)
+        await self.kapso.enviar_lista(telefono, mensaje + "\n\n¿Cual te llamo la atencion? 👇", filas)
 
         contexto["opciones_presentadas"] = [o.model_dump(mode="json") for o in seleccionables]
         self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.ESPERANDO_SELECCION, contexto)
@@ -438,5 +455,7 @@ class Orquestador:
         self.repo.registrar_auditoria(conversacion_id, "checkout_preparado", {"opcion_id": opcion_id})
         await self.kapso.enviar_texto(
             telefono,
-            "Pedido preparado hasta checkout (sin pago). El core de facturacion recibio el registro de tu solicitud.",
+            "🎉 *Pedido preparado hasta checkout (sin pago)*\n\n"
+            "✅ Registro y decision enviados al core de facturacion\n"
+            "🛒 El pedido queda listo en tu carrito de Rappi para la revision corporativa",
         )
