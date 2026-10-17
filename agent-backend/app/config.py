@@ -32,8 +32,9 @@ class Settings(BaseSettings):
     rappi_api_base_url: str = Field(default="http://127.0.0.1:3100")
     rappi_cli_timeout_s: int = Field(default=60)
 
-    # Jev (TypeSafe AI) - servicio HTTP de evaluacion
-    jev_base_url: str = Field(default="")
+    # Jev (TypeSafe AI) - evaluacion de opciones
+    jev_api_key: str = Field(default="", description="API key de TypeSafe AI (console.typesafe.ai)")
+    jev_base_url: str = Field(default="", description="Obsoleto: la API es fija (api.typesafe.ai)")
 
     # WhatsApp Flow de requisitos (requiere numero de produccion; vacio = deshabilitado)
     kapso_flow_id_requisitos: str = Field(default="")
