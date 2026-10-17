@@ -55,9 +55,14 @@ class RappiClient:
             raise RappiError("Rappi CLI no disponible.") from exc
 
     async def buscar(self, consulta: str) -> list[dict]:
-        """Busca productos y tiendas por texto libre."""
+        """Busca productos y tiendas por texto libre.
+
+        La respuesta real de /api/search es {"stores": [...], "popular_dishes": [...]}.
+        """
         datos = await self._get("/api/search", params={"q": consulta})
-        return datos.get("results", datos if isinstance(datos, list) else [])
+        if isinstance(datos, dict):
+            return datos.get("stores", [])
+        return datos if isinstance(datos, list) else []
 
     async def detalle_tienda(self, tienda_id: str) -> dict:
         """Detalle y menu de una tienda."""
@@ -82,22 +87,30 @@ class RappiClient:
 
     @staticmethod
     def a_opciones(consulta: str, resultados: list[dict]) -> list[OpcionProducto]:
-        """Normaliza resultados de busqueda a OpcionProducto tolerando claves variables."""
+        """Normaliza la respuesta de /api/search de rappi-cli a OpcionProducto.
+
+        El shape real es: {"stores": [{"store_id", "store_name", "eta_value",
+        "store_rating_score", "products": [{"product_id", "name", "price", ...}]}]}
+        """
         opciones: list[OpcionProducto] = []
-        for i, item in enumerate(resultados):
-            tienda_id = str(item.get("store_id") or item.get("storeId") or item.get("id") or "")
-            producto_id = str(item.get("product_id") or item.get("productId") or item.get("id") or f"prod_{i}")
-            precio = item.get("price") or item.get("precio") or 0
-            opciones.append(
-                OpcionProducto(
-                    opcion_id=f"op_{i}_{producto_id}",
-                    tienda_id=tienda_id,
-                    tienda_nombre=str(item.get("store_name") or item.get("storeName") or "Desconocida"),
-                    producto_id=producto_id,
-                    producto_nombre=str(item.get("name") or item.get("nombre") or consulta),
-                    precio_cop=int(precio),
-                    tiempo_entrega_min=item.get("delivery_time") or item.get("tiempo_entrega"),
-                    calificacion=item.get("rating") or item.get("calificacion"),
+        for tienda in resultados:
+            productos = tienda.get("products") or []
+            for p in productos:
+                if not p.get("is_available", True) or not p.get("in_stock", True):
+                    continue
+                producto_id = str(p.get("product_id") or p.get("id") or "")
+                if not producto_id:
+                    continue
+                opciones.append(
+                    OpcionProducto(
+                        opcion_id=f"op_{producto_id}",
+                        tienda_id=str(tienda.get("store_id") or tienda.get("super_store_id") or ""),
+                        tienda_nombre=str(p.get("store_name") or tienda.get("store_name") or tienda.get("brand_name") or "Desconocida"),
+                        producto_id=producto_id,
+                        producto_nombre=str(p.get("name") or consulta),
+                        precio_cop=int(p.get("price") or 0),
+                        tiempo_entrega_min=tienda.get("eta_value"),
+                        calificacion=tienda.get("store_rating_score"),
+                    )
                 )
-            )
         return opciones
