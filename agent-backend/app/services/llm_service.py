@@ -43,7 +43,7 @@ class GeminiService:
         settings = get_settings()
         self._api_key = settings.gemini_api_key
         self._modelo = settings.gemini_model
-        self._client = httpx.AsyncClient(timeout=60.0)
+        self._client = httpx.AsyncClient(timeout=httpx.Timeout(120.0, read=120.0))
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -57,7 +57,12 @@ class GeminiService:
                 params={"key": self._api_key},
                 json={
                     "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"response_mime_type": "application/json", "temperature": 0.2},
+                    "generationConfig": {
+                        "response_mime_type": "application/json",
+                        "temperature": 0.2,
+                        # gemini-3.8-flash es modelo con thinking; sin presupuesto 0 pasa de 60s
+                        "thinkingConfig": {"thinkingBudget": 0},
+                    },
                 },
             )
             respuesta.raise_for_status()
