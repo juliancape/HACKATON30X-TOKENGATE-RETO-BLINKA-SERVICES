@@ -13,15 +13,23 @@ from app.models.purchase import RequisitosCompra
 
 log = get_logger(__name__)
 
-PROMPT_REQUISITOS = """Eres un asistente de compras corporativas. El empleado escribe que desea \
-comer/comprar y tu trabajo es extraer los requisitos de busqueda.
+PROMPT_REQUISITOS = """Eres el agente de compras corporativas por WhatsApp. Clasifica el mensaje del empleado \
+y extrae los requisitos de compra.
+
 Devuelve JSON con la estructura:
-{{"descripcion": str, "presupuesto_maximo_cop": int|null, "cantidad_personas": int, "restricciones": [str]}}
+{{"intencion": "saludo"|"compra"|"otro", "descripcion": str|null, "presupuesto_maximo_cop": int|null, \
+"cantidad_personas": int|null, "restricciones": [str]}}
 Reglas:
-- presupuesto_maximo_cop es el maximo por pedido que el empleado menciona; null si no lo dice.
-- restricciones incluye alergias, dietas, tipo de comida, ubicacion o tiempo maximo de entrega que mencione.
+- "saludo": solo saluda, no pide nada concreto (ej: "hola", "buenas", "que tal").
+- "compra": menciona algo que quiere pedir (aunque falten datos).
+- "otro": pregunta del agente, queja u off-topic.
+- descripcion: que desea comprar; null si es saludo u otro.
+- presupuesto_maximo_cop: maximo por pedido que menciona; null si no lo dice.
+- cantidad_personas: null si no lo dice.
 - No inventes datos que el empleado no dijo.
-Solicitud del empleado: {solicitud}"""
+
+Contexto previo de la conversacion (el empleado ya dijo esto, no lo pidas de nuevo): {previos}
+Mensaje actual del empleado: {solicitud}"""
 
 
 class LlmError(Exception):
@@ -65,9 +73,19 @@ class GeminiService:
             log.error("gemini_error", error=str(exc))
             raise LlmError("Respuesta invalida de Gemini") from exc
 
-    async def extraer_requisitos(self, solicitud: str) -> RequisitosCompra:
-        """Convierte la solicitud en lenguaje natural a requisitos estructurados."""
-        datos = await self._generar_json(PROMPT_REQUISITOS.format(solicitud=solicitud))
+    async def interpretar_mensaje(self, solicitud: str, previos: dict | None = None) -> dict[str, Any]:
+        """Clasifica la intencion (saludo/compra/otro) y extrae requisitos, con memoria.
+
+        Devuelve el dict crudo del LLM; el orquestador hace la fusion con `previos`.
+        """
+        datos = await self._generar_json(
+            PROMPT_REQUISITOS.format(solicitud=solicitud, previos=previos or "sin contexto previo")
+        )
+        return datos
+
+    async def extraer_requisitos(self, solicitud: str, previos: dict | None = None) -> RequisitosCompra:
+        """Convierte la solicitud (con memoria de la conversacion) a requisitos."""
+        datos = await self.interpretar_mensaje(solicitud, previos)
         return RequisitosCompra.model_validate(datos)
 
     async def redactar_presentacion(self, solicitud: str, opciones: list[dict[str, Any]]) -> str:

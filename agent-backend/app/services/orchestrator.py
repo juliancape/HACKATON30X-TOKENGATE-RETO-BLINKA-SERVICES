@@ -168,23 +168,73 @@ class Orquestador:
             )
             return
 
-        requisitos = await self.llm.extraer_requisitos(texto)
-        contexto["requisitos"] = requisitos.model_dump(mode="json")
-        contexto["solicitud_texto"] = texto
+        previos = contexto.get("requisitos") or {}
+        analisis = await self.llm.interpretar_mensaje(texto, previos)
 
-        # Si falta presupuesto, pedirlo por WhatsApp Flow (si hay Flow configurado)
-        flow_id = self.settings.kapso_flow_id_requisitos
-        if requisitos.presupuesto_maximo_cop is None and flow_id:
-            prefill = {"descripcion": requisitos.descripcion, "personas": str(requisitos.cantidad_personas)}
-            if requisitos.restricciones:
-                prefill["restricciones"] = ", ".join(requisitos.restricciones)
-            await self.kapso.enviar_flow(
-                telefono, flow_id, "Falta tu presupuesto maximo. Completalo aqui:", "Completar", prefill
+        # Saludo u off-topic: presentarse y pedir lo necesario
+        if analisis.get("intencion") != "compra":
+            await self.kapso.enviar_texto(
+                telefono,
+                "Hola! Soy el agente de compras corporativas: busco opciones reales en Rappi y preparo "
+                "tu pedido segun las politicas de la empresa (sin pago).\n\n"
+                "Para buscarte bien dime:\n"
+                "1. Que quieres comer o comprar\n"
+                "2. Para cuantas personas\n"
+                "3. Presupuesto maximo (opcional, si no lo das busco igual)\n"
+                "4. Restricciones (alergias, tipo de comida, etc)\n\n"
+                "Ej: 'sushi para 2, max 40 mil'",
             )
-            contexto["esperando_flow"] = True
+            return
+
+        # Fusion con memoria: lo ya dicho se conserva si el nuevo mensaje no lo trae
+        personas = (
+            analisis.get("cantidad_personas")
+            if analisis.get("cantidad_personas") is not None
+            else (previos.get("cantidad_personas") or 1)
+        )
+        requisitos = RequisitosCompra(
+            descripcion=str(analisis.get("descripcion") or previos.get("descripcion") or texto),
+            presupuesto_maximo_cop=(
+                analisis.get("presupuesto_maximo_cop")
+                if analisis.get("presupuesto_maximo_cop") is not None
+                else previos.get("presupuesto_maximo_cop")
+            ),
+            cantidad_personas=max(1, int(personas or 1)),
+            restricciones=analisis.get("restricciones") or previos.get("restricciones", []),
+        )
+        contexto["requisitos"] = requisitos.model_dump(mode="json")
+        contexto["solicitud_texto"] = f"{previos.get('solicitud_texto', '')} {texto}".strip()
+
+        # Insistir por lo que falta antes de buscar
+        faltantes: list[str] = []
+        if not requisitos.descripcion:
+            faltantes.append("que quieres comer o comprar")
+
+        botones_extra: list[dict[str, str]] = []
+        if requisitos.presupuesto_maximo_cop is None:
+            faltantes.append("presupuesto maximo (o busca sin limite)")
+            botones_extra = [{"id": "req:buscar", "titulo": "Buscar sin limite"}]
+
+        if faltantes:
+            detalle = "\n".join(f"- {f}" for f in faltantes)
+            botones = botones_extra + ([{"id": "req:corregir", "titulo": "Volver a escribir"}] if botones_extra else [])
+            await self.kapso.enviar_botones(
+                telefono, f"Me falta informacion para buscar bien:\n{detalle}", botones
+            )
             self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.RECOPILANDO_REQUISITOS, contexto)
             return
 
+        await self.kapso.enviar_botones(
+            telefono,
+            f"Entendi esto:\n- Que: {requisitos.descripcion}\n"
+            f"- Personas: {requisitos.cantidad_personas}\n"
+            f"- Presupuesto: {requisitos.presupuesto_maximo_cop} COP\n"
+            f"- Restricciones: {', '.join(requisitos.restricciones) or 'ninguna'}",
+            [
+                {"id": "req:buscar", "titulo": "Buscar opciones"},
+                {"id": "req:corregir", "titulo": "Corregir datos"},
+            ],
+        )
         self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.RECOPILANDO_REQUISITOS, contexto)
         # Crear la solicitud trazable (una por conversacion) con FK a conversations
         if not contexto.get("solicitud_id"):
@@ -195,24 +245,6 @@ class Orquestador:
                 contexto["solicitud_id"], EstadoSolicitud.RECOPILANDO_REQUISITOS, requisitos.model_dump(mode="json")
             )
             self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.RECOPILANDO_REQUISITOS, contexto)
-
-        resumen = (
-            f"Entendi esto:\n- Que: {requisitos.descripcion}\n"
-            f"- Personas: {requisitos.cantidad_personas}\n"
-            f"- Presupuesto: {requisitos.presupuesto_maximo_cop or 'sin limite indicado'} COP\n"
-            f"- Restricciones: {', '.join(requisitos.restricciones) or 'ninguna'}"
-        )
-        await self.kapso.enviar_botones(
-            telefono,
-            resumen,
-            [
-                {"id": "req:buscar", "titulo": "Buscar opciones"},
-                {"id": "req:corregir", "titulo": "Corregir datos"},
-            ],
-        )
-        # Guardamos las IDs de respuesta para la siguiente interaccion
-        contexto["esperando_confirmacion_requisitos"] = True
-        self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.RECOPILANDO_REQUISITOS, contexto)
 
     # --------------------------------------------------------- busqueda + jev
 
