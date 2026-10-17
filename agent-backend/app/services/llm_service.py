@@ -48,35 +48,44 @@ class GeminiService:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def _generar_json(self, prompt: str) -> dict[str, Any]:
-        """Ejecuta el prompt exigiendo salida JSON parseable."""
+    async def _generar_json(self, prompt: str, max_intentos: int = 3) -> dict[str, Any]:
+        """Ejecuta el prompt exigiendo salida JSON parseable, con reintentos ante 429."""
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self._modelo}:generateContent"
-        try:
-            respuesta = await self._client.post(
-                url,
-                params={"key": self._api_key},
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "response_mime_type": "application/json",
-                        "temperature": 0.2,
-                        # gemini-3.8-flash es modelo con thinking; sin presupuesto 0 pasa de 60s
-                        "thinkingConfig": {"thinkingBudget": 0},
-                    },
-                },
-            )
-            respuesta.raise_for_status()
-            datos = respuesta.json()
-            texto = datos["candidates"][0]["content"]["parts"][0]["text"]
-            import json
+        cuerpo = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "response_mime_type": "application/json",
+                "temperature": 0.2,
+                # gemini-3.8-flash es modelo con thinking; sin presupuesto 0 pasa de 60s
+                "thinkingConfig": {"thinkingBudget": 0},
+            },
+        }
+        ultimo_error: Exception | None = None
+        for intento in range(1, max_intentos + 1):
+            try:
+                respuesta = await self._client.post(url, params={"key": self._api_key}, json=cuerpo)
+                if respuesta.status_code == 429:
+                    # Rate limit del free tier: esperar y reintentar con backoff
+                    espera = int(respuesta.headers.get("retry-after", "0") or 0) or (2**intento)
+                    log.warning("gemini_rate_limit", intento=intento, espera_s=espera)
+                    import asyncio
 
-            return json.loads(texto)
-        except httpx.HTTPStatusError as exc:
-            log.error("gemini_http_error", status=exc.response.status_code)
-            raise LlmError(f"Gemini respondio {exc.response.status_code}") from exc
-        except (KeyError, ValueError, httpx.HTTPError) as exc:
-            log.error("gemini_error", error=str(exc))
-            raise LlmError("Respuesta invalida de Gemini") from exc
+                    await asyncio.sleep(espera)
+                    ultimo_error = LlmError("Gemini rate limit (429)")
+                    continue
+                respuesta.raise_for_status()
+                datos = respuesta.json()
+                texto = datos["candidates"][0]["content"]["parts"][0]["text"]
+                import json
+
+                return json.loads(texto)
+            except httpx.HTTPStatusError as exc:
+                log.error("gemini_http_error", status=exc.response.status_code)
+                raise LlmError(f"Gemini respondio {exc.response.status_code}") from exc
+            except (KeyError, ValueError, httpx.HTTPError) as exc:
+                log.error("gemini_error", error=str(exc))
+                raise LlmError("Respuesta invalida de Gemini") from exc
+        raise LlmError(f"Gemini rate limit persistente tras {max_intentos} intentos") from ultimo_error
 
     async def interpretar_mensaje(self, solicitud: str, previos: dict | None = None) -> dict[str, Any]:
         """Clasifica la intencion (saludo/compra/otro) y extrae requisitos, con memoria.
