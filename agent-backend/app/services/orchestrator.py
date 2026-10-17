@@ -74,7 +74,9 @@ class Orquestador:
         log.info("mensaje_recibido", conversacion_id=conversacion_id, estado=estado, tipo=contenido.tipo)
 
         try:
-            if estado in (EstadoSolicitud.NUEVA, EstadoSolicitud.RECOPILANDO_REQUISITOS):
+            if contenido.tipo == "flow":
+                await self._procesar_flow(conversacion_id, telefono, contenido, contexto)
+            elif estado in (EstadoSolicitud.NUEVA, EstadoSolicitud.RECOPILANDO_REQUISITOS):
                 await self._fase_requisitos(conversacion_id, telefono, contenido, contexto)
             elif estado == EstadoSolicitud.ESPERANDO_SELECCION:
                 await self._fase_seleccion(conversacion_id, telefono, contenido, contexto)
@@ -93,6 +95,41 @@ class Orquestador:
                 telefono,
                 "Tuvimos un problema procesando tu solicitud. Intenta de nuevo en unos minutos.",
             )
+
+    async def _procesar_flow(
+        self, conversacion_id: str, telefono: str, contenido: TextoEntrante, contexto: dict
+    ) -> None:
+        """Recibe la respuesta del WhatsApp Flow, valida en backend y fusiona requisitos."""
+        datos = contenido.flow_data or {}
+        descripcion = str(datos.get("descripcion") or "").strip()
+        if not descripcion:
+            await self.kapso.enviar_texto(telefono, "El formulario no trajo descripcion. Escribe que necesitas.")
+            return
+        # Validacion determinista en backend (no confiar en el formulario)
+        presupuesto_crudo = str(datos.get("presupuesto") or "").strip()
+        personas_crudo = str(datos.get("personas") or "").strip()
+        restricciones = [r for r in str(datos.get("restricciones") or "").split(",") if r.strip()]
+        presupuesto = int(presupuesto_crudo) if presupuesto_crudo.isdigit() else None
+        personas = int(personas_crudo) if personas_crudo.isdigit() else 1
+
+        previos = contexto.get("requisitos") or {}
+        contexto["requisitos"] = {
+            "descripcion": descripcion,
+            "presupuesto_maximo_cop": presupuesto or previos.get("presupuesto_maximo_cop"),
+            "cantidad_personas": max(1, personas),
+            "restricciones": restricciones or previos.get("restricciones", []),
+        }
+        contexto.pop("esperando_flow", None)
+        self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.RECOPILANDO_REQUISITOS, contexto)
+        req = contexto["requisitos"]
+        await self.kapso.enviar_botones(
+            telefono,
+            f"Con estos datos busco:\n- {req['descripcion']}\n- Personas: {req['cantidad_personas']}\n"
+            f"- Presupuesto: {req['presupuesto_maximo_cop'] or 'sin limite'} COP",
+            [{"id": "req:buscar", "titulo": "Buscar opciones"}, {"id": "req:corregir", "titulo": "Corregir"}],
+        )
+        contexto["esperando_confirmacion_requisitos"] = True
+        self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.RECOPILANDO_REQUISITOS, contexto)
 
     async def _reiniciar(self, conversacion_id: str, telefono: str) -> None:
         self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.NUEVA, {})
@@ -113,6 +150,20 @@ class Orquestador:
         requisitos = await self.llm.extraer_requisitos(texto)
         contexto["requisitos"] = requisitos.model_dump(mode="json")
         contexto["solicitud_texto"] = texto
+
+        # Si falta presupuesto, pedirlo por WhatsApp Flow (si hay Flow configurado)
+        flow_id = self.settings.kapso_flow_id_requisitos
+        if requisitos.presupuesto_maximo_cop is None and flow_id:
+            prefill = {"descripcion": requisitos.descripcion, "personas": str(requisitos.cantidad_personas)}
+            if requisitos.restricciones:
+                prefill["restricciones"] = ", ".join(requisitos.restricciones)
+            await self.kapso.enviar_flow(
+                telefono, flow_id, "Falta tu presupuesto maximo. Completalo aqui:", "Completar", prefill
+            )
+            contexto["esperando_flow"] = True
+            self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.RECOPILANDO_REQUISITOS, contexto)
+            return
+
         self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.RECOPILANDO_REQUISITOS, contexto)
 
         resumen = (
@@ -230,9 +281,26 @@ class Orquestador:
         elif contenido.boton_id == ID_RECHAZO or (contenido.texto_libre and not contenido.boton_id):
             contexto.pop("opciones_presentadas", None)
             self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.NUEVA, contexto)
-            await self.kapso.enviar_texto(
-                telefono, "Sin problema. Describe mejor que buscas y volvemos a buscar."
-            )
+            flow_id = self.settings.kapso_flow_id_requisitos
+            if contenido.boton_id == ID_RECHAZO and flow_id:
+                # Reevaluacion: preguntar que desea modificar via Flow prellenado
+                requisitos = contexto.get("requisitos") or {}
+                prefill = {
+                    "descripcion": requisitos.get("descripcion", ""),
+                    "personas": str(requisitos.get("cantidad_personas", 1)),
+                }
+                if requisitos.get("presupuesto_maximo_cop"):
+                    prefill["presupuesto"] = str(requisitos["presupuesto_maximo_cop"])
+                if requisitos.get("restricciones"):
+                    prefill["restricciones"] = ", ".join(requisitos["restricciones"])
+                await self.kapso.enviar_flow(
+                    telefono, flow_id, "Ajusta lo que quieras cambiar y volvemos a buscar:", "Rebuscar", prefill
+                )
+                self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.RECOPILANDO_REQUISITOS, contexto)
+            else:
+                await self.kapso.enviar_texto(
+                    telefono, "Sin problema. Describe mejor que buscas y volvemos a buscar."
+                )
         else:
             await self.kapso.enviar_texto(telefono, "Elige una de las opciones con los botones, por favor.")
 

@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # Jev (TypeSafe AI) - servicio HTTP de evaluacion
     jev_base_url: str = Field(default="")
 
+    # WhatsApp Flow de requisitos (requiere numero de produccion; vacio = deshabilitado)
+    kapso_flow_id_requisitos: str = Field(default="")
+
     # Core de facturacion
     billing_core_base_url: str = Field(default="")
     billing_core_api_key: str = Field(default="")

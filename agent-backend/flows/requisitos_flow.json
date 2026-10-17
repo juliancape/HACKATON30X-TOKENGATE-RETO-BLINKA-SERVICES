@@ -1,0 +1,69 @@
+{
+  "version": "7.0",
+  "routing_model": {
+    "REQUISITOS": []
+  },
+  "screens": [
+    {
+      "id": "REQUISITOS",
+      "title": "Solicitud de compra",
+      "terminal": true,
+      "data": {
+        "descripcion": "",
+        "presupuesto": "",
+        "personas": "",
+        "restricciones": ""
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextHeading",
+            "text": "Completa tu solicitud"
+          },
+          {
+            "type": "TextBody",
+            "text": "Ajusta los datos y enviame el formulario."
+          },
+          {
+            "type": "TextInput",
+            "name": "descripcion",
+            "label": "Que deseas comprar",
+            "required": true,
+            "input-type": "text"
+          },
+          {
+            "type": "TextInput",
+            "name": "presupuesto",
+            "label": "Presupuesto maximo (COP)",
+            "input-type": "number"
+          },
+          {
+            "type": "TextInput",
+            "name": "personas",
+            "label": "Cantidad de personas",
+            "input-type": "number"
+          },
+          {
+            "type": "TextArea",
+            "name": "restricciones",
+            "label": "Restricciones (alergias, tipo de comida, etc)"
+          },
+          {
+            "type": "Footer",
+            "label": "Enviar",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {
+                "descripcion": "${form.descripcion}",
+                "presupuesto": "${form.presupuesto}",
+                "personas": "${form.personas}",
+                "restricciones": "${form.restricciones}"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

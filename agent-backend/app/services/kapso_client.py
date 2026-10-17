@@ -91,3 +91,28 @@ class KapsoClient:
                 },
             }
         )
+
+    async def enviar_flow(self, telefono: str, flow_id: str, cuerpo: str, cta: str, datos: dict | None = None) -> dict[str, Any]:
+        """Envia un WhatsApp Flow (formulario nativo) navegable a una pantalla.
+
+        Requiere un Flow publicado en Meta (numero de produccion). Los `datos`
+        prellenan los campos de la pantalla destino.
+        """
+        payload: dict[str, Any] = {
+            "flow_message_version": "3",
+            "flow_id": flow_id,
+            "flow_cta": cta,
+            "flow_action": "navigate",
+        }
+        action_payload: dict[str, Any] = {"screen": "REQUISITOS"}
+        if datos:
+            action_payload["data"] = datos
+        payload["flow_action_payload"] = action_payload
+        return await self._post(
+            {
+                "messaging_product": "whatsapp",
+                "to": telefono,
+                "type": "interactive",
+                "interactive": {"type": "flow", "body": {"text": cuerpo}, "action": {"name": "flow", "parameters": payload}},
+            }
+        )

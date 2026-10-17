@@ -38,10 +38,11 @@ class TextoEntrante(BaseModel):
     texto_libre: str | None = None
     boton_id: str | None = None
     boton_titulo: str | None = None
+    flow_data: dict | None = None
 
 
 def extraer_contenido(mensaje: KapsoMessage) -> TextoEntrante:
-    """Normaliza el mensaje entrante a texto libre o click de boton."""
+    """Normaliza el mensaje entrante a texto libre, click de boton o respuesta de Flow."""
     if mensaje.type == "interactive" and mensaje.interactive:
         tipo_inter = mensaje.interactive.get("type", "")
         if tipo_inter == "button_reply":
@@ -50,6 +51,21 @@ def extraer_contenido(mensaje: KapsoMessage) -> TextoEntrante:
         if tipo_inter == "list_reply":
             reply = mensaje.interactive.get("list_reply", {})
             return TextoEntrante(tipo="boton", boton_id=reply.get("id"), boton_titulo=reply.get("title"))
+        if tipo_inter == "nfm_reply":
+            # Respuesta de un WhatsApp Flow completado
+            nfm = mensaje.interactive.get("nfm_reply", {})
+            datos: dict = {}
+            crudo = nfm.get("response_json")
+            if isinstance(crudo, str) and crudo:
+                try:
+                    import json
+
+                    datos = json.loads(crudo)
+                except ValueError:
+                    datos = {}
+            if not datos:
+                datos = mensaje.kapso.get("flow_response") or {}
+            return TextoEntrante(tipo="flow", flow_data=datos)
     if mensaje.type == "text" and mensaje.text:
         return TextoEntrante(tipo="texto", texto_libre=mensaje.text.get("body"))
     contenido = mensaje.kapso.get("content")
