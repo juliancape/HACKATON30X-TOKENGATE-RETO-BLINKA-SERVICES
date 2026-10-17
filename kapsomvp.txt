@@ -1,0 +1,262 @@
+kapso token = [TOKEN-ROTADO]
+
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.kapso.ai/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# MCP server
+
+> Let AI agents operate your WhatsApp numbers through MCP.
+
+Project MCP gives AI agents live tools to send messages, read conversations, manage templates, and configure webhooks on your WhatsApp numbers.
+
+Use it when an MCP-capable agent should operate a WhatsApp number without shell access — read inbound messages, send replies, manage templates, configure webhooks, and provision new numbers.
+
+Endpoint:
+
+```text theme={null}
+https://api.kapso.ai/mcp
+```
+
+## Authentication
+
+Choose the auth option your MCP client supports:
+
+* Browser sign-in: configure the MCP URL, sign in to Kapso, and choose one project.
+* API key: create a project API key in Kapso and pass it as a header.
+
+API keys get full project access. Browser sign-in gets only the [permissions](#permissions) you approve.
+
+Accepted API key headers:
+
+```http theme={null}
+Authorization: Bearer YOUR_PROJECT_API_KEY
+```
+
+```http theme={null}
+X-API-Key: YOUR_PROJECT_API_KEY
+```
+
+Use `Authorization: Bearer` for bearer-token clients. Use `X-API-Key` when your MCP client lets you configure custom headers.
+
+## Permissions
+
+When you sign in through the browser, the consent page asks what the agent can do:
+
+* **Read only** (default): read access only. No messages sent, nothing changed.
+* **Full access**: every permission the client requests that your project role allows.
+* **Custom**: search and toggle individual permissions.
+
+Sending messages, publishing agents, running investigations, and deletes each need their own permission. Write, delete, run, and send permissions require the matching read permission.
+
+| Area | Scopes |
+| - | - |
+| Project | `mcp:project:read` |
+| Conversations | `mcp:conversations:read`, `mcp:conversations:write`, `mcp:messages:send` |
+| Contacts | `mcp:contacts:read`, `mcp:contacts:write`, `mcp:contacts:delete` |
+| Customers | `mcp:customers:read`, `mcp:customers:write`, `mcp:customers:delete` |
+| WhatsApp numbers | `mcp:numbers:read`, `mcp:numbers:write`, `mcp:numbers:delete` |
+| Setup links | `mcp:setup:read`, `mcp:setup:write` |
+| WhatsApp Flows | `mcp:whatsapp_flows:read`, `mcp:whatsapp_flows:write`, `mcp:whatsapp_flows:publish` |
+| Templates | `mcp:templates:read`, `mcp:templates:write` |
+| Project events | `mcp:events:read`, `mcp:events:write`, `mcp:events:delete`, `mcp:events:send` |
+| Webhooks | `mcp:webhooks:read`, `mcp:webhooks:write`, `mcp:webhooks:delete` |
+| Broadcasts | `mcp:broadcasts:read`, `mcp:broadcasts:write`, `mcp:broadcasts:send` |
+| Workflows | `mcp:workflows:read`, `mcp:workflows:write`, `mcp:workflows:run` |
+| Functions | `mcp:functions:read`, `mcp:functions:write`, `mcp:functions:run` |
+| Meta Business Agents | `mcp:agents:read`, `mcp:agents:write`, `mcp:agents:run`, `mcp:agents:publish` |
+| Diagnostics | `mcp:diagnostics:read`, `mcp:diagnostics:run`, `mcp:diagnostics:write` |
+| Team notifications | `mcp:notifications:read`, `mcp:notifications:write`, `mcp:notifications:send` |
+| Personal notifications | `mcp:notifications:self:read`, `mcp:notifications:self:write` |
+
+Members who are not project owners or admins can't grant customer or number write/delete, setup link, event write/delete/send, webhook write/delete, broadcast write/send, WhatsApp Flow write/publish, agent write/publish, workflow or function write, or team notification permissions. Those permissions are rechecked on every call, so a role downgrade applies immediately.
+
+The agent only sees the tools and actions it has permission for. A call without the required permission returns a tool error with `code: insufficient_scope` and the `required_scopes`. Without setup write access, responses omit setup URLs and tokens. Without webhook write access, they omit webhook secrets and custom headers. Without workflow write access, `workflows` and `workflow_executions` responses omit `headers`.
+
+`mcp:broadcasts:write` covers creating drafts, managing recipients, stopping a send, and cancelling a schedule. `mcp:broadcasts:send` covers sending and scheduling. It is separate from `mcp:messages:send`, so inbox reply access doesn't allow broadcasts.
+
+Starting or resuming a workflow execution needs both `mcp:workflows:run` and `mcp:messages:send`, because the run can send WhatsApp messages. Emitting a project event needs both `mcp:events:send` and `mcp:messages:send`, because subscribed workflows can send messages.
+
+`mcp:contacts:delete` covers contact erasure (deleting a contact and its conversation history). `mcp:contacts:write` doesn't include it.
+
+Creating a flow with `publish: true` also needs `mcp:whatsapp_flows:publish`. Flow data endpoint actions also need the matching `mcp:functions:*` permission; `update_data_endpoint` and `register_data_endpoint` also need `mcp:whatsapp_flows:publish`, because they republish published flows. `setup_encryption` also needs `mcp:numbers:write`.
+
+Creating or editing a webhook subscribed to `project.event` also needs `mcp:events:read`. `whatsapp_webhooks` `list_deliveries` omits customer phone numbers unless the connection has `mcp:conversations:read`.
+
+To change permissions, reconnect and authorize again. The new grant replaces the previous connection for the same app and project, and revokes its tokens. Connections authorized before this change keep full access until you reconnect.
+
+## Connect
+
+### Browser sign-in
+
+For clients that support browser sign-in, configure only the MCP URL.
+
+<CodeGroup>
+  ```bash Codex theme={null}
+  codex mcp add kapso --url https://api.kapso.ai/mcp
+  codex mcp login kapso
+  ```
+
+  ```bash Claude Code theme={null}
+  claude mcp add --transport http kapso https://api.kapso.ai/mcp
+  # Then run inside Claude Code:
+  /mcp
+  ```
+
+  ```json Cursor theme={null}
+  {
+    "mcpServers": {
+      "kapso": {
+        "url": "https://api.kapso.ai/mcp"
+      }
+    }
+  }
+  ```
+</CodeGroup>
+
+When Kapso opens in the browser, sign in and select the project the client should use.
+
+### API key
+
+Set your project API key:
+
+```bash theme={null}
+export KAPSO_API_KEY="your_project_api_key"
+```
+
+<CodeGroup>
+  ```bash Codex theme={null}
+  codex mcp add kapso --url https://api.kapso.ai/mcp --bearer-token-env-var KAPSO_API_KEY
+  ```
+
+  ```bash Claude Code theme={null}
+  claude mcp add --transport http kapso https://api.kapso.ai/mcp \
+    --header "Authorization: Bearer $KAPSO_API_KEY"
+  ```
+
+  ```json Cursor theme={null}
+  {
+    "mcpServers": {
+      "kapso": {
+        "url": "https://api.kapso.ai/mcp",
+        "headers": {
+          "Authorization": "Bearer ${env:KAPSO_API_KEY}"
+        }
+      }
+    }
+  }
+  ```
+</CodeGroup>
+
+### Use X-API-Key instead
+
+Codex CLI has no `--header` flag, so X-API-Key goes in `~/.codex/config.toml`. For Cursor and Claude Code, just swap the header.
+
+<CodeGroup>
+  ```toml Codex theme={null}
+  [mcp_servers.kapso]
+  url = "https://api.kapso.ai/mcp"
+  env_http_headers = { "X-API-Key" = "KAPSO_API_KEY" }
+  ```
+
+  ```bash Claude Code theme={null}
+  claude mcp add --transport http kapso https://api.kapso.ai/mcp \
+    --header "X-API-Key: $KAPSO_API_KEY"
+  ```
+
+  ```json Cursor theme={null}
+  {
+    "mcpServers": {
+      "kapso": {
+        "url": "https://api.kapso.ai/mcp",
+        "headers": {
+          "X-API-Key": "${env:KAPSO_API_KEY}"
+        }
+      }
+    }
+  }
+  ```
+</CodeGroup>
+
+## Tools
+
+Project MCP exposes grouped tools. Most tools accept an `action` and `params`.
+
+| Tool | Actions |
+| - | - |
+| `status` | Shows auth, project status, customer count, WhatsApp number count, and next steps |
+| `search_docs` | Searches Kapso and WhatsApp docs |
+| `customers` | `help`, `list`, `get`, `create`, `update`, `delete` |
+| `setup_links` | `help`, `list`, `create`, `update`, `revoke` |
+| `whatsapp_numbers` | `help`, `list`, `get`, `resolve`, `health`, `start_setup`, `create`, `update`, `delete` |
+| `whatsapp_contacts` | `help`, `list`, `get`, `create`, `update`, `delete`, `list_call_permissions`, `get_call_permission`, `list_marketing_preferences`, `get_marketing_preference` |
+| `whatsapp_conversations` | `help`, `list`, `get`, `set_status` |
+| `whatsapp_conversation_assignments` | `help`, `list_members`, `list`, `get`, `create`, `update` |
+| `whatsapp_messages` | `help`, `list`, `get`, `send`, `mark_read` |
+| `whatsapp_templates` | `help`, `list`, `get`, `create` |
+| `whatsapp_flows` | `help`, `list`, `get`, `create`, `publish`, `list_versions`, `get_version`, `create_version`, `data_endpoint`, `create_data_endpoint`, `update_data_endpoint`, `deploy_data_endpoint`, `register_data_endpoint`, `setup_encryption`, `function_logs`, `function_invocations` |
+| `whatsapp_webhooks` | `help`, `list`, `get`, `create`, `update`, `delete`, `test`, `list_deliveries` |
+| `project_events` | `help`, `list`, `create` |
+| `project_event_definitions` | `help`, `list`, `get`, `create`, `update`, `delete` |
+| `whatsapp_broadcasts` | `help`, `list`, `get`, `create`, `update`, `list_recipients`, `add_recipients`, `clear_recipients`, `send`, `schedule`, `cancel` |
+| `workflows` | `help`, `list`, `get`, `get_definition`, `get_variables`, `create`, `update`, `publish`, `list_triggers`, `create_trigger`, `replace_triggers`, `update_trigger`, `delete_trigger` |
+| `workflow_executions` | `help`, `list`, `get`, `list_events`, `get_event`, `start`, `resume`, `update_status` |
+| `functions` | `help`, `list`, `get`, `create`, `update`, `delete`, `deploy`, `invoke`, `list_invocations`, `list_secrets`, `set_secret`, `delete_secret` |
+| `findings` | `help`, `list`, `get`, `read_evidence`, `start_investigation`, `dismiss`, `mark_addressed` |
+| `list_provider_models` | Lists AI provider models, matching `GET /platform/v1/provider_models`. Takes no arguments |
+
+Use `action: "help"` on grouped tools to get required params, optional params, and examples.
+
+`whatsapp_webhooks` manages both project and number webhooks. Omit the number selector to create a project webhook. `project_events` `create` emits an event like `POST /platform/v1/events`, with the same validation and quotas.
+
+Every tool except `findings` counts against your plan's per-minute Platform API rate limit. `help` calls are free. With an API key, calls share the key's REST budget. `workflow_executions` `start` also follows the per-workflow burst limit of the REST execution endpoint. `whatsapp_numbers` `health` shares the REST health check limit of 5 per second and 60 per minute per project. Over a limit, the tool returns an error with `code: rate_limited`.
+
+Failed calls set `isError: true` and return `error` and a `code`. Common codes are `invalid_params`, `not_found`, `conflict`, `forbidden`, `insufficient_scope`, `payment_required`, `rate_limited`, `unavailable`, and `upstream_error`. Some tools return their own codes, such as `ambiguous_identifier` from `whatsapp_contacts`, so treat unknown codes as errors. Rate-limited `health` calls include `details.retry_after` in seconds.
+
+`workflow_executions` `list` takes a `workflow_id`, a `whatsapp_conversation_id`, or both. `list` and `list_events` switch to cursor pagination when you pass `limit` (1-100, default 20), `after`, or `before`, and return `paging.next` and `paging.previous` like the REST API. `findings` `list` always uses cursors, with `limit` from 1 to 25 (default 20).
+
+`whatsapp_broadcasts` mirrors the [broadcasts API](/docs/platform/broadcasts/api): create a draft, add recipients in batches of up to 1000, then `send` or `schedule` (future ISO-8601 timestamp with a timezone). `add_recipients` returns `added`, `duplicates`, and per-entry `errors`. Poll `get` for delivery progress. Recipients return `whatsapp_contact_id` and `whatsapp_conversation_id` instead of nested contact and conversation objects.
+
+`whatsapp_contacts` accepts a contact UUID, phone number, or BSUID as the identifier. An ambiguous BSUID returns `ambiguous_identifier` with candidate contact IDs; retry with the UUID. `update` replaces `metadata` (pass `{}` to clear it). `delete` schedules erasure and returns `deletion_scheduled: true`.
+
+`whatsapp_conversation_assignments` needs a `conversation_id` on every call. Use `list_members` to find a `user_id` for `create`. A conversation can have one active assignment: to reassign, `update` the current one with `active: false`, then `create` the new one.
+
+`whatsapp_flows` mirrors the Platform API for [WhatsApp Flows](/docs/whatsapp/flows/overview). `id` is the Kapso flow UUID and `version_id` is a version UUID. Responses omit `data_endpoint_url` and `preview_url`. Publishing is irreversible on Meta. Send flows with `whatsapp_messages`.
+
+Browser sign-in connections only see the tools and actions their [permissions](#permissions) allow.
+
+## Examples
+
+Ask your agent to check setup:
+
+```text theme={null}
+Use the kapso MCP server to check my project status and tell me the next action.
+```
+
+Ask your agent to create a setup link:
+
+```text theme={null}
+Use kapso setup_links with action=create for the default customer, then return the setup URL.
+```
+
+Ask your agent to read and send WhatsApp messages:
+
+```text theme={null}
+Use kapso whatsapp_conversations to list recent active conversations, then use whatsapp_messages to read the latest inbound messages.
+```
+
+```text theme={null}
+Use kapso whatsapp_messages with action=send to send "Hello from Kapso" to +15551234567 from my connected WhatsApp number.
+```
+
+## Project MCP vs Docs MCP
+
+| Server | Endpoint | Use it for |
+| - | - | - |
+| Project MCP | `https://api.kapso.ai/mcp` | Operating WhatsApp numbers with browser sign-in or an API key |
+| Docs MCP | `https://docs.kapso.ai/mcp` | Documentation lookup only |
+
+Use the [CLI](/docs/whatsapp/cli) when your agent has terminal access. Use Project MCP when your agent supports MCP and should operate Kapso directly.
+
+
+This documentation is built and hosted on [Mintlify](https://mintlify.com), a developer documentation platform.
