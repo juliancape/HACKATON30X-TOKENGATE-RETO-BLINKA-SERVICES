@@ -38,8 +38,18 @@ class JevClient:
     def configurado(self) -> bool:
         return bool(self._api_key)
 
-    def _construir_preguntas(self, opciones: list[OpcionProducto]) -> dict:
+    def _construir_preguntas(self, opciones: list[OpcionProducto], hay_historico: bool) -> dict:
         """Una Choice atomica por opcion + Noul de precio razonable por opcion."""
+        criterio_precio = (
+            "Es consistente con el historico de precios"
+            if hay_historico
+            else "Es un precio razonable de mercado para este tipo de producto (no hay historico disponible)"
+        )
+        criterio_precio_no = (
+            "Es atipicamente alto o bajo frente al historico"
+            if hay_historico
+            else "Es un precio claramente desproporcionado para el producto"
+        )
         preguntas: dict = {}
         for opcion in opciones:
             preguntas[f"decision_{opcion.opcion_id}"] = {
@@ -53,10 +63,11 @@ class JevClient:
                     "solicitud": "ver estado.solicitud",
                     "historico": "ver estado.historico_precios",
                     "politicas": "ver estado.politicas",
+                    "hay_historico": hay_historico,
                 },
                 "criteria": {
-                    "aprobar": "Precio razonable frente al historico, cumple politicas y encaja con la solicitud",
-                    "rechazar": "Precio desviado del historico o viola politicas o no encaja con la solicitud",
+                    "aprobar": "Precio razonable, cumple politicas y encaja con la solicitud",
+                    "rechazar": "Precio desviado o viola politicas o no encaja con la solicitud",
                     "escalar": "Informacion insuficiente o caso ambiguo que requiere revision humana",
                 },
             }
@@ -65,14 +76,16 @@ class JevClient:
                 "instructions": {
                     "pregunta": (
                         f"El precio de {opcion.producto_nombre} ({opcion.precio_cop} COP) "
-                        "es consistente con el historico de precios para este tipo de producto?"
+                        + (
+                            "es consistente con el historico de precios para este tipo de producto?"
+                            if hay_historico
+                            else "es un precio razonable de mercado para este tipo de producto?"
+                        )
                     ),
                     "historico": "ver estado.historico_precios",
+                    "hay_historico": hay_historico,
                 },
-                "criteria": {
-                    "true": "Precio dentro del rango historico razonable",
-                    "false": "Precio atipicamente alto o bajo frente al historico",
-                },
+                "criteria": {"true": criterio_precio, "false": criterio_precio_no},
             }
         return preguntas
 
@@ -98,7 +111,7 @@ class JevClient:
         payload = {
             "state": estado,
             "model": "jev-latest",
-            "questions": self._construir_preguntas(opciones),
+            "questions": self._construir_preguntas(opciones, bool(historico_precios)),
         }
         try:
             respuesta = await self._client.post(

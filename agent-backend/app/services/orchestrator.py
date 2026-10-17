@@ -293,6 +293,11 @@ class Orquestador:
 
         seleccionables = mejores_opciones(evaluaciones, opciones_por_id, cantidad=3)
         self.repo.guardar_decisiones(contexto.get("solicitud_id", conversacion_id), evaluaciones)
+        # Bootstrap del historico de precios con lo observado en esta busqueda
+        self.repo.registrar_precios(
+            [opciones_por_id[e.opcion_id].model_dump(mode="json") for e in candidatas],
+            requisitos.descripcion,
+        )
         self.repo.registrar_auditoria(
             conversacion_id,
             "evaluacion",

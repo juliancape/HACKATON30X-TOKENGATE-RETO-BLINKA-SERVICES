@@ -73,15 +73,39 @@ class SupabaseRepo:
 
     def historico_precios(self, texto_producto: str, limite: int = 30) -> list[dict[str, Any]]:
         """Historico de precios por nombre de producto (busqueda por similitud simple)."""
+        termino = (texto_producto or "").strip()
+        if not termino:
+            return []
         respuesta = (
             self._client.table("price_history")
-            .select("producto_nombre, precio_cop, fecha")
-            .ilike("producto_nombre", f"%{texto_producto[:40]}%")
+            .select("producto_nombre, tienda_nombre, precio_cop, fecha")
+            .ilike("producto_nombre", f"%{termino[:40]}%")
             .order("fecha", desc=True)
             .limit(limite)
             .execute()
         )
         return respuesta.data or []
+
+    def registrar_precios(self, opciones: list[dict[str, Any]], texto_producto: str) -> None:
+        """Bootstrap del historico: registra los precios observados en la busqueda.
+
+        Cada busqueda es una observacion del mercado; asi price_history crece
+        de forma organica y Jev gana base de comparacion.
+        """
+        if not opciones:
+            return
+        try:
+            filas = [
+                {
+                    "producto_nombre": f"{texto_producto}: {o.get('producto_nombre', '')}"[:200],
+                    "tienda_nombre": o.get("tienda_nombre", ""),
+                    "precio_cop": int(o.get("precio_cop") or 0),
+                }
+                for o in opciones
+            ]
+            self._client.table("price_history").insert(filas).execute()
+        except Exception as exc:  # noqa: BLE001 - el historico no debe romper el flujo
+            log.warning("registrar_precios_fallo", error=str(exc))
 
     def politicas(self) -> list[dict[str, Any]]:
         """Politicas corporativas activas."""
