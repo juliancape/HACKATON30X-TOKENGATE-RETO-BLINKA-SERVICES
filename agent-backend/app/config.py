@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     kapso_flow_id_requisitos: str = Field(default="")
 
     # Sistema pagador (core de facturacion, esquema pagador_*)
-    pagador_org_id: str = Field(default="demo")
+    pagador_org_id: str = Field(default="tokengate")
 
     def validate_required(self) -> list[str]:
         """Devuelve la lista de variables obligatorias que faltan."""
