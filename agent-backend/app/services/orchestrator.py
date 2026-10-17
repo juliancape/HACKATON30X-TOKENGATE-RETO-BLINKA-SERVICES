@@ -409,7 +409,11 @@ class Orquestador:
             return
 
         carrito = await self.rappi.agregar_al_carrito(
-            opcion["tienda_id"], opcion["producto_id"], opcion["producto_nombre"], cantidad=1
+            opcion["tienda_id"],
+            opcion["producto_id"],
+            opcion["producto_nombre"],
+            cantidad=1,
+            precio_cop=int(opcion.get("precio_cop") or 0),
         )
         checkout = await self.rappi.preview_checkout()
 

@@ -69,12 +69,28 @@ class RappiClient:
         return await self._get(f"/api/store/{tienda_id}")
 
     async def agregar_al_carrito(
-        self, tienda_id: str, producto_id: str, nombre: str, cantidad: int = 1
+        self,
+        tienda_id: str,
+        producto_id: str,
+        nombre: str,
+        cantidad: int = 1,
+        precio_cop: int = 0,
     ) -> dict:
-        """Agrega un producto al carrito actual."""
+        """Agrega un producto al carrito.
+
+        Contrato real de rappi-cli (src/api/app.ts):
+        {"storeId": int, "productId": str, "name": str, "quantity"?: int,
+         "toppings"?: [int], "price"?: int}
+        """
         return await self._post(
             "/api/cart/add",
-            {"store": tienda_id, "product": producto_id, "name": nombre, "qty": cantidad},
+            {
+                "storeId": int(tienda_id),
+                "productId": str(producto_id),
+                "name": nombre,
+                "quantity": cantidad,
+                "price": int(precio_cop or 0),
+            },
         )
 
     async def carrito(self) -> dict:
