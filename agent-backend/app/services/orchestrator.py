@@ -78,7 +78,11 @@ class Orquestador:
                 await self._procesar_flow(conversacion_id, telefono, contenido, contexto)
             elif contenido.boton_id and contenido.boton_id.startswith("req:"):
                 await self._manejar_confirmacion_requisitos(conversacion_id, telefono, contenido, contexto)
-            elif estado in (EstadoSolicitud.NUEVA, EstadoSolicitud.RECOPILANDO_REQUISITOS):
+            elif estado in (
+                EstadoSolicitud.NUEVA,
+                EstadoSolicitud.RECOPILANDO_REQUISITOS,
+                EstadoSolicitud.BUSCANDO_OPCIONES,
+            ):
                 await self._fase_requisitos(conversacion_id, telefono, contenido, contexto)
             elif estado == EstadoSolicitud.ESPERANDO_SELECCION:
                 await self._fase_seleccion(conversacion_id, telefono, contenido, contexto)
@@ -93,12 +97,15 @@ class Orquestador:
         except (RappiError, LlmError, JevError, BillingCoreError, OrquestadorError) as exc:
             log.error("fallo_flujo", conversacion_id=conversacion_id, error=str(exc))
             self.repo.registrar_auditoria(conversacion_id, "error_flujo", {"error": str(exc)})
+            # Recuperar la conversacion a un estado accionable; el contexto se conserva
+            self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.NUEVA, contexto)
             await self.kapso.enviar_texto(
                 telefono,
                 "Tuvimos un problema procesando tu solicitud. Intenta de nuevo en unos minutos.",
             )
         except Exception as exc:  # noqa: BLE001 - nunca dejar al empleado sin respuesta
             log.error("fallo_inesperado", conversacion_id=conversacion_id, error=str(exc), exc_info=True)
+            self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.NUEVA, contexto)
             await self.kapso.enviar_texto(
                 telefono,
                 "Tuvimos un problema procesando tu solicitud. Intenta de nuevo en unos minutos.",
