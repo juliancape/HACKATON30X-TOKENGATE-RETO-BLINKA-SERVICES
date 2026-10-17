@@ -53,7 +53,7 @@ Kapso firma cada webhook con HMAC SHA256 (`X-Webhook-Signature`) usando `KAPSO_W
 
 - **Jev**: se asume `POST {JEV_BASE_URL}/evaluate` con `{solicitud, opciones, historico_precios, politicas}` devolviendo `{"evaluaciones": [...]}`. Ajustar cuando llegue la documentacion del servicio.
 - **Core de facturacion**: se asume `POST {BILLING_CORE_BASE_URL}/purchase-records`. Ajustar con la doc final.
-- **Rappi REST**: los paths (`/search`, `/cart/add`, `/checkout`) son aproximados; verificar contra el servidor real de rappi-cli y ajustar `rappi_client.py`.
+- **Rappi REST**: paths corregidos contra la doc oficial del repo (`/api/search?q=`, `/api/cart/add`, `GET /api/checkout`). El body de `cart/add` y el shape de respuestas se verifican contra el server vivo tras `rappi login`.
 - Formulario interactivo: el MVP usa botones/listas + extraccion por LLM. WhatsApp Flows nativo queda como mejora.
 
 ## Notas

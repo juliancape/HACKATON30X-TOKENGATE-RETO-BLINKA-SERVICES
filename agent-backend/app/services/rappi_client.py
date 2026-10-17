@@ -56,29 +56,29 @@ class RappiClient:
 
     async def buscar(self, consulta: str) -> list[dict]:
         """Busca productos y tiendas por texto libre."""
-        datos = await self._get("/search", params={"query": consulta})
+        datos = await self._get("/api/search", params={"q": consulta})
         return datos.get("results", datos if isinstance(datos, list) else [])
 
     async def detalle_tienda(self, tienda_id: str) -> dict:
         """Detalle y menu de una tienda."""
-        return await self._get(f"/store/{tienda_id}")
+        return await self._get(f"/api/store/{tienda_id}")
 
     async def agregar_al_carrito(
         self, tienda_id: str, producto_id: str, nombre: str, cantidad: int = 1
     ) -> dict:
         """Agrega un producto al carrito actual."""
         return await self._post(
-            "/cart/add",
+            "/api/cart/add",
             {"store": tienda_id, "product": producto_id, "name": nombre, "qty": cantidad},
         )
 
     async def carrito(self) -> dict:
         """Estado actual del carrito."""
-        return await self._get("/cart")
+        return await self._get("/api/cart")
 
     async def preview_checkout(self) -> dict:
         """Resumen del pedido hasta checkout, sin pagar."""
-        return await self._post("/checkout")
+        return await self._get("/api/checkout")
 
     @staticmethod
     def a_opciones(consulta: str, resultados: list[dict]) -> list[OpcionProducto]:
