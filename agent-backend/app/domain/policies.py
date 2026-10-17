@@ -1,57 +1,56 @@
-"""Politicas duras de gasto corporativo.
+"""Validacion de presupuesto del pedido.
 
-El backend aplica estas restricciones de forma obligatoria. Jev emite una
-recomendacion, pero NINGUNA opcion que viole una regla dura puede aprobarse,
-y la aceptacion del empleado nunca sustituye la aprobacion corporativa.
+Unica regla: el TOTAL del pedido (precio unitario x cantidad de personas)
+no puede superar el presupuesto maximo declarado por el empleado en su
+mensaje. Si el empleado no declaro presupuesto, no hay tope.
+
+Las politicas corporativas adicionales viven en otro sistema y llegan al
+backend solo como contexto para Jev; el backend ya no aplica topes propios.
 """
-from dataclasses import dataclass
-
-from app.config import Settings
 from app.models.purchase import Decision, OpcionProducto, ResultadoEvaluacion
 
 
-@dataclass
-class ContextoGasto:
-    """Gasto acumulado del empleado para el dia en curso."""
-
-    gasto_diario_cop: int = 0
-
-
-def validar_limites_duros(
+def validar_presupuesto(
     opcion: OpcionProducto,
-    contexto: ContextoGasto,
-    settings: Settings,
+    presupuesto_maximo_cop: int | None,
+    cantidad: int = 1,
 ) -> ResultadoEvaluacion:
-    """Evalua las reglas obligatorias contra una opcion candidata."""
-    violaciones: list[str] = []
-
-    if opcion.precio_cop > settings.policy_max_order_cop:
-        violaciones.append(
-            f"precio {opcion.precio_cop} COP supera el maximo por pedido ({settings.policy_max_order_cop} COP)"
+    """Valida que el total del pedido quepa en el presupuesto declarado."""
+    cantidad = max(1, int(cantidad or 1))
+    total = opcion.precio_cop * cantidad
+    if presupuesto_maximo_cop is None:
+        return ResultadoEvaluacion(
+            opcion_id=opcion.opcion_id,
+            decision=Decision.APROBAR,
+            motivo=f"Sin presupuesto declarado; total estimado ${total:,} COP",
         )
-    total_con_pedido = contexto.gasto_diario_cop + opcion.precio_cop
-    if total_con_pedido > settings.policy_max_daily_cop:
-        violaciones.append(
-            f"total diario {total_con_pedido} COP superaria el maximo diario ({settings.policy_max_daily_cop} COP)"
+    if total > presupuesto_maximo_cop:
+        exceso = total - presupuesto_maximo_cop
+        return ResultadoEvaluacion(
+            opcion_id=opcion.opcion_id,
+            decision=Decision.RECHAZAR,
+            motivo=(
+                f"Total ${total:,} COP ({cantidad} x ${opcion.precio_cop:,}) "
+                f"supera el presupuesto de ${presupuesto_maximo_cop:,} COP en ${exceso:,}"
+            ),
         )
-
-    decision = Decision.RECHAZAR if violaciones else Decision.APROBAR
-    motivo = "Dentro de politicas" if not violaciones else "Viola politicas obligatorias: " + "; ".join(violaciones)
     return ResultadoEvaluacion(
         opcion_id=opcion.opcion_id,
-        decision=decision,
-        motivo=motivo,
-        violaciones_politica=violaciones,
+        decision=Decision.APROBAR,
+        motivo=(
+            f"Total ${total:,} COP ({cantidad} x ${opcion.precio_cop:,}) "
+            f"dentro del presupuesto de ${presupuesto_maximo_cop:,} COP"
+        ),
     )
 
 
-def filtrar_aprobables(
+def filtrar_por_presupuesto(
     opciones: list[OpcionProducto],
-    contexto: ContextoGasto,
-    settings: Settings,
+    presupuesto_maximo_cop: int | None,
+    cantidad: int = 1,
 ) -> list[ResultadoEvaluacion]:
-    """Valida cada opcion contra las reglas duras y conserva el orden."""
-    return [validar_limites_duros(opcion, contexto, settings) for opcion in opciones]
+    """Evalua cada opcion contra el presupuesto; conserva el orden de entrada."""
+    return [validar_presupuesto(o, presupuesto_maximo_cop, cantidad) for o in opciones]
 
 
 def mejores_opciones(

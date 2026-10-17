@@ -1,25 +1,9 @@
-"""Pruebas de las reglas de negocio (politicas duras)."""
-import pytest
-
-from app.config import Settings
-from app.domain.policies import ContextoGasto, filtrar_aprobables, mejores_opciones, validar_limites_duros
+"""Pruebas de la regla de presupuesto total del pedido."""
+from app.domain.policies import filtrar_por_presupuesto, mejores_opciones, validar_presupuesto
 from app.models.purchase import Decision, OpcionProducto
 
 
-@pytest.fixture
-def settings() -> Settings:
-    return Settings(
-        kapso_api_key="x",
-        kapso_phone_number_id="x",
-        gemini_api_key="x",
-        supabase_url="http://localhost",
-        supabase_service_key="x",
-        policy_max_order_cop=60000,
-        policy_max_daily_cop=120000,
-    )
-
-
-def opcion(precio: int, nombre: str = "almojabana") -> OpcionProducto:
+def opcion(precio: int, nombre: str = "perro") -> OpcionProducto:
     return OpcionProducto(
         opcion_id=f"op_{nombre}_{precio}",
         tienda_id="t1",
@@ -30,39 +14,48 @@ def opcion(precio: int, nombre: str = "almojabana") -> OpcionProducto:
     )
 
 
-def test_precio_dentro_de_politica_aprueba(settings: Settings) -> None:
-    resultado = validar_limites_duros(opcion(30000), ContextoGasto(0), settings)
+def test_sin_presupuesto_aprueba() -> None:
+    resultado = validar_presupuesto(opcion(50000), None, 1)
     assert resultado.decision == Decision.APROBAR
 
 
-def test_precio_supera_maximo_por_pedido_rechaza(settings: Settings) -> None:
-    resultado = validar_limites_duros(opcion(70000), ContextoGasto(0), settings)
-    assert resultado.decision == Decision.RECHAZAR
-    assert "maximo por pedido" in resultado.motivo
-
-
-def test_gasto_diario_acumulado_rechaza(settings: Settings) -> None:
-    resultado = validar_limites_duros(opcion(30000), ContextoGasto(gasto_diario_cop=100000), settings)
-    assert resultado.decision == Decision.RECHAZAR
-    assert "maximo diario" in resultado.motivo
-
-
-def test_borde_exacto_maximo_aprueba(settings: Settings) -> None:
-    resultado = validar_limites_duros(opcion(60000), ContextoGasto(0), settings)
+def test_una_persona_dentro_del_presupuesto() -> None:
+    resultado = validar_presupuesto(opcion(35000), 50000, 1)
     assert resultado.decision == Decision.APROBAR
 
 
-def test_filtrar_aprobables_conserva_orden(settings: Settings) -> None:
-    evaluaciones = filtrar_aprobables(
-        [opcion(70000), opcion(20000), opcion(50000)], ContextoGasto(0), settings
+def test_dos_personas_total_supera_presupuesto_rechaza() -> None:
+    # 35000 x 2 = 70000 > 50000: el caso exacto reportado
+    resultado = validar_presupuesto(opcion(35000), 50000, 2)
+    assert resultado.decision == Decision.RECHAZAR
+    assert "supera el presupuesto" in resultado.motivo
+
+
+def test_dos_personas_dentro_del_presupuesto() -> None:
+    # 24000 x 2 = 48000 <= 50000
+    resultado = validar_presupuesto(opcion(24000), 50000, 2)
+    assert resultado.decision == Decision.APROBAR
+
+
+def test_borde_exacto_aprueba() -> None:
+    # 25000 x 2 = 50000 == presupuesto
+    resultado = validar_presupuesto(opcion(25000), 50000, 2)
+    assert resultado.decision == Decision.APROBAR
+
+
+def test_filtro_conserva_orden_y_decide_por_total() -> None:
+    evaluaciones = filtrar_por_presupuesto(
+        [opcion(35000), opcion(24000), opcion(26000)], 50000, 2
     )
-    assert [e.decision for e in evaluaciones] == [Decision.RECHAZAR, Decision.APROBAR, Decision.APROBAR]
+    assert [e.decision for e in evaluaciones] == [
+        Decision.RECHAZAR,
+        Decision.APROBAR,
+        Decision.RECHAZAR,
+    ]
 
 
-def test_mejores_opciones_devuelve_maximo_tres(settings: Settings) -> None:
+def test_mejores_opciones_maximo_tres() -> None:
     opciones = [opcion(1000 * i, f"p{i}") for i in range(1, 6)]
-    evaluaciones = filtrar_aprobables(opciones, ContextoGasto(0), settings)
+    evaluaciones = filtrar_por_presupuesto(opciones, 50000, 1)
     por_id = {o.opcion_id: o for o in opciones}
-    seleccion = mejores_opciones(evaluaciones, por_id, cantidad=3)
-    assert len(seleccion) == 3
-    assert all(o.precio_cop <= 60000 for o in seleccion)
+    assert len(mejores_opciones(evaluaciones, por_id, cantidad=3)) == 3

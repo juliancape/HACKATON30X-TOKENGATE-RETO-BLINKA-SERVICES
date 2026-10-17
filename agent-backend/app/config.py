@@ -43,11 +43,6 @@ class Settings(BaseSettings):
     billing_core_base_url: str = Field(default="")
     billing_core_api_key: str = Field(default="")
 
-    # Politicas de gasto por defecto (el backend las refuerza siempre)
-    policy_max_order_cop: int = Field(default=60000)
-    policy_max_daily_cop: int = Field(default=120000)
-    policy_max_items: int = Field(default=10)
-
     def validate_required(self) -> list[str]:
         """Devuelve la lista de variables obligatorias que faltan."""
         faltantes: list[str] = []

@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.config import Settings, get_settings
-from app.domain.policies import ContextoGasto, filtrar_aprobables, mejores_opciones
+from app.domain.policies import filtrar_por_presupuesto, mejores_opciones, validar_presupuesto
 from app.logging_setup import get_logger
 from app.models.kapso import TextoEntrante
 from app.models.purchase import Decision, EstadoSolicitud, RequisitosCompra
@@ -234,8 +234,9 @@ class Orquestador:
 
         await self.kapso.enviar_botones(
             telefono,
-            f"📋 *Entendi esto:*\n🍔 {requisitos.descripcion}\n👥 {requisitos.cantidad_personas} persona(s)\n"
-            f"💰 Máximo *${requisitos.presupuesto_maximo_cop:,} COP*\n"
+            f"📋 *Entendi esto:*\n🍔 {requisitos.descripcion}\n"
+            f"👥 {requisitos.cantidad_personas} persona(s) → {requisitos.cantidad_personas} unidad(es)\n"
+            f"💰 Presupuesto TOTAL: *${requisitos.presupuesto_maximo_cop:,} COP*"
             f"⚠️ Restricciones: {', '.join(requisitos.restricciones) or 'ninguna'}",
             [
                 {"id": "req:buscar", "titulo": "🔎 Buscar opciones"},
@@ -268,9 +269,8 @@ class Orquestador:
             )
             return
 
-        gasto_diario = self.repo.gasto_diario(telefono)
-        contexto_gasto = ContextoGasto(gasto_diario_cop=gasto_diario)
-        evaluaciones = filtrar_aprobables(opciones, contexto_gasto, self.settings)
+        cantidad_personas = max(1, int(requisitos.cantidad_personas or 1))
+        evaluaciones = filtrar_por_presupuesto(opciones, requisitos.presupuesto_maximo_cop, cantidad_personas)
 
         # Jev solo sobre las candidatas que ya pasaron las politicas duras,
         # con tope para no disparar cientos de preguntas atomicas.
@@ -422,13 +422,12 @@ class Orquestador:
         requisitos = RequisitosCompra.model_validate(contexto.get("requisitos") or {})
         cantidad = max(1, int(requisitos.cantidad_personas or 1))
         total = int(opcion.get("precio_cop") or 0) * cantidad
-        gasto_diario = self.repo.gasto_diario(telefono)
         opcion_total = OpcionProducto.model_validate({**opcion, "precio_cop": total})
-        validacion = filtrar_aprobables([opcion_total], ContextoGasto(gasto_diario), self.settings)[0]
+        validacion = validar_presupuesto(opcion_total, requisitos.presupuesto_maximo_cop, cantidad)
         if validacion.decision != Decision.APROBAR:
             await self.kapso.enviar_texto(
                 telefono,
-                f"⚠️ El precio cambió o ya no cumple politicas: {validacion.motivo}\nBuscamos de nuevo.",
+                f"⚠️ El precio cambió o ya no entra en tu presupuesto: {validacion.motivo}\nBuscamos de nuevo.",
             )
             self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.NUEVA, contexto)
             return
