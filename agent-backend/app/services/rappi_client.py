@@ -117,6 +117,11 @@ class RappiClient:
                 producto_id = str(p.get("product_id") or p.get("id") or "")
                 if not producto_id:
                     continue
+                precio = int(p.get("price") or 0)
+                # Precios absurdos (ej: tiendas con $100 en el menu) son data
+                # invalida del comercio y se descartan de plano.
+                if precio < 1000:
+                    continue
                 opciones.append(
                     OpcionProducto(
                         opcion_id=f"op_{producto_id}",
@@ -124,7 +129,7 @@ class RappiClient:
                         tienda_nombre=str(p.get("store_name") or tienda.get("store_name") or tienda.get("brand_name") or "Desconocida"),
                         producto_id=producto_id,
                         producto_nombre=str(p.get("name") or consulta),
-                        precio_cop=int(p.get("price") or 0),
+                        precio_cop=precio,
                         tiempo_entrega_min=tienda.get("eta_value"),
                         calificacion=tienda.get("store_rating_score"),
                         imagen_url=f"https://images.rappi.com/products/{p['image']}" if p.get("image") else None,
