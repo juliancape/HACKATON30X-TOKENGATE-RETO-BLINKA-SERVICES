@@ -329,7 +329,10 @@ class Orquestador:
             self.repo.registrar_auditoria(conversacion_id, "jev_no_disponible", {"error": str(exc)})
 
         seleccionables = mejores_opciones(evaluaciones, opciones_por_id, cantidad=3)
-        self.repo.guardar_decisiones(contexto.get("solicitud_id", conversacion_id), evaluaciones)
+        if contexto.get("solicitud_id"):
+            self.repo.guardar_decisiones(contexto["solicitud_id"], evaluaciones)
+        else:
+            log.warning("decisiones_sin_solicitud", conversacion_id=conversacion_id)
         # Bootstrap del historico de precios con lo observado en esta busqueda
         self.repo.registrar_precios(
             [opciones_por_id[e.opcion_id].model_dump(mode="json") for e in candidatas],
