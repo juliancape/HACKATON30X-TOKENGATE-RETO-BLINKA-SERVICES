@@ -254,13 +254,23 @@ class Orquestador:
     # --------------------------------------------------------- busqueda + jev
 
     @staticmethod
+    def _query_busqueda(descripcion: str) -> str:
+        """Quita numeros y cantidades del texto antes de buscar en Rappi.
+
+        Gemini incluye la cantidad en la descripcion ('2 perros calientes'),
+        que ensucia la busqueda: el query debe ser solo el producto.
+        """
+        return " ".join(t for t in descripcion.split() if not t.isdigit())
+
+    @staticmethod
     def _filtrar_por_relevancia(consulta: str, opciones: list, minimo: int = 3) -> list:
         """Prioriza productos cuyo nombre matchee los terminos de la busqueda.
 
         Rappi devuelve tiendas por match de tienda con productos no relacionados
         (ej: 'perro caliente' -> El Corral con hamburguesas). Se ordena por
         coincidencias de nombre y se descarta lo que no matchee nada, salvo
-        que con eso queden menos de `minimo` opciones.
+        que con eso queden menos de `minimo` opciones. Ignora plurales
+        ('perros' matchea 'perro').
         """
         import unicodedata
 
@@ -268,13 +278,20 @@ class Orquestador:
             texto = unicodedata.normalize("NFD", texto.lower())
             return "".join(c for c in texto if unicodedata.category(c) != "Mn")
 
-        terminos = [t for t in normalizar(consulta).split() if len(t) > 2]
+        def singularizar(token: str) -> str:
+            return token[:-1] if len(token) >= 4 and token.endswith("s") else token
+
+        terminos = {
+            singularizar(t)
+            for t in normalizar(consulta).split()
+            if len(t) > 2 and not t.isdigit()
+        }
         if not terminos:
             return opciones
 
         def puntaje(op) -> int:
             nombre = normalizar(op.producto_nombre)
-            return sum(1 for t in terminos if t in nombre)
+            return sum(1 for t in terminos if t in nombre or singularizar(t) in nombre)
 
         relevantes = [op for op in opciones if puntaje(op) > 0]
         relevantes.sort(key=puntaje, reverse=True)
@@ -288,7 +305,7 @@ class Orquestador:
         requisitos = RequisitosCompra.model_validate(contexto["requisitos"])
         self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.BUSCANDO_OPCIONES, contexto)
 
-        resultados = await self.rappi.buscar(requisitos.descripcion)
+        resultados = await self.rappi.buscar(self._query_busqueda(requisitos.descripcion))
         opciones = self.rappi.a_opciones(requisitos.descripcion, resultados)
         opciones = self._filtrar_por_relevancia(requisitos.descripcion, opciones)
         if not opciones:
@@ -328,6 +345,10 @@ class Orquestador:
             log.warning("jev_no_disponible_continua_con_politicas", error=str(exc))
             self.repo.registrar_auditoria(conversacion_id, "jev_no_disponible", {"error": str(exc)})
 
+        # Priorizar opciones con imagen para que el top 3 venga con fotos
+        evaluaciones = [e for e in evaluaciones if opciones_por_id[e.opcion_id].imagen_url] + [
+            e for e in evaluaciones if not opciones_por_id[e.opcion_id].imagen_url
+        ]
         seleccionables = mejores_opciones(evaluaciones, opciones_por_id, cantidad=3)
         if contexto.get("solicitud_id"):
             self.repo.guardar_decisiones(contexto["solicitud_id"], evaluaciones)
