@@ -418,8 +418,10 @@ class Orquestador:
         requisitos = RequisitosCompra.model_validate(contexto.get("requisitos") or {})
         cantidad = max(1, int(requisitos.cantidad_personas or 1))
         total = int(opcion.get("precio_cop") or 0) * cantidad
-        opcion_total = OpcionProducto.model_validate({**opcion, "precio_cop": total})
-        validacion = validar_presupuesto(opcion_total, requisitos.presupuesto_maximo_cop, cantidad)
+        # validar_presupuesto multiplica precio x cantidad por si sola:
+        # pasar la opcion ORIGINAL, no el total ya calculado (evita doble multiplicacion)
+        opcion_original = OpcionProducto.model_validate(opcion)
+        validacion = validar_presupuesto(opcion_original, requisitos.presupuesto_maximo_cop, cantidad)
         if validacion.decision != Decision.APROBAR:
             await self.kapso.enviar_texto(
                 telefono,
