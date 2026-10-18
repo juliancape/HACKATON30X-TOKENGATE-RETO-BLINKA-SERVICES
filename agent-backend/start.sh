@@ -66,7 +66,14 @@ else
 fi
 TUNNEL_RAPPI=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' $LOGDIR/tunnel_rappi.log | head -1)
 echo "tunnel rappi: $TUNNEL_RAPPI"
-curl -s -o /dev/null -w "tunnel rappi: %{http_code}\n" "$TUNNEL_RAPPI/api/cart"
+# Esperar a que el tunnel este vivo (hasta ~30s)
+for i in $(seq 1 6); do
+  CODIGO=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$TUNNEL_RAPPI/api/cart" || true)
+  [ "$CODIGO" = "200" ] && break
+  echo "tunnel rappi no responde ($CODIGO), reintento $i/6..."
+  sleep 5
+done
+echo "tunnel rappi: $CODIGO"
 
 echo "== 4/4 Webhook / variables =="
 KAPSO_KEY=$(grep '^KAPSO_API_KEY=' .env | cut -d= -f2)
