@@ -253,6 +253,36 @@ class Orquestador:
 
     # --------------------------------------------------------- busqueda + jev
 
+    @staticmethod
+    def _filtrar_por_relevancia(consulta: str, opciones: list, minimo: int = 3) -> list:
+        """Prioriza productos cuyo nombre matchee los terminos de la busqueda.
+
+        Rappi devuelve tiendas por match de tienda con productos no relacionados
+        (ej: 'perro caliente' -> El Corral con hamburguesas). Se ordena por
+        coincidencias de nombre y se descarta lo que no matchee nada, salvo
+        que con eso queden menos de `minimo` opciones.
+        """
+        import unicodedata
+
+        def normalizar(texto: str) -> str:
+            texto = unicodedata.normalize("NFD", texto.lower())
+            return "".join(c for c in texto if unicodedata.category(c) != "Mn")
+
+        terminos = [t for t in normalizar(consulta).split() if len(t) > 2]
+        if not terminos:
+            return opciones
+
+        def puntaje(op) -> int:
+            nombre = normalizar(op.producto_nombre)
+            return sum(1 for t in terminos if t in nombre)
+
+        relevantes = [op for op in opciones if puntaje(op) > 0]
+        relevantes.sort(key=puntaje, reverse=True)
+        if len(relevantes) >= minimo:
+            return relevantes
+        # Sin suficientes matchees de nombre, conservar el orden original de Rappi
+        return opciones
+
     async def _buscar_y_presentar(self, conversacion_id: str, telefono: str, contexto: dict) -> None:
         """Flujo central: Rappi -> Supabase -> Jev -> politicas -> botones."""
         requisitos = RequisitosCompra.model_validate(contexto["requisitos"])
@@ -260,6 +290,7 @@ class Orquestador:
 
         resultados = await self.rappi.buscar(requisitos.descripcion)
         opciones = self.rappi.a_opciones(requisitos.descripcion, resultados)
+        opciones = self._filtrar_por_relevancia(requisitos.descripcion, opciones)
         if not opciones:
             await self.kapso.enviar_texto(
                 telefono, "No encontre resultados en Rappi para eso. Prueba con otra descripcion."
