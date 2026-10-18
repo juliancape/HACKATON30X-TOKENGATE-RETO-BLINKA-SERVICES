@@ -1,63 +1,104 @@
-# Agente de Compras Corporativas con IA (MVP)
+# Agente de Compras Corporativas con IA
 
-Backend FastAPI que orquesta: WhatsApp (Kapso) -> LLM (Gemini) -> Rappi (rappi-cli) -> Supabase (historico + politicas) -> Jev (evaluacion) -> Core de facturacion.
+Agente de WhatsApp que recibe solicitudes de comida en lenguaje natural, busca opciones reales en Rappi, las filtra por el presupuesto del pedido y las presenta con fotos; al elegir una, prepara el carrito y el checkout (sin pago) e inserta la factura en el sistema pagador (blinka) para su revision corporativa.
+
+## Estado
+
+- Backend desplegado en **Railway**: `https://backend-production-695d.up.railway.app`
+- `rappi server` corre **local** (Plan B hibrido): la sesion de Rappi vive en IP residencial y el token nunca sale de la maquina. El backend lo alcanza por tunnel de Cloudflare.
+- Codigo en `github.com/juliancape/HACKATON30X-TOKENGATE-RETO-BLINKA-SERVICES` (rama `main`).
+
+## Arquitectura
+
+```
+Empleado (WhatsApp)
+   |
+Kapso (webhook firmado HMAC, payload v2)
+   |
+FastAPI en Railway  --- Gemini (intencion + requisitos, JSON estructurado)
+   |                 --- Jev / TypeSafe AI (solo filtro de calidad y ranking)
+   |                 --- Supabase (conversaciones, solicitudes, decisiones, price_history)
+   v
+rappi server (local, :3100) --- Rappi real
+   |
+Checkout preparado (sin pago)
+   |
+INSERT en pagador_subjects (Supabase, org tokengate)
+   |
+Core de facturacion (externo): aprueba/rechaza via pagador_reviews
+```
+
+## Reglas de negocio
+
+- **Unica regla dura del backend**: el TOTAL del pedido (precio unitario x cantidad de personas) no puede superar el presupuesto declarado en el mensaje. Presupuesto = total, no por cabeza. Las opciones presentadas ya vienen pre-filtradas por ese total.
+- La seleccion del empleado **no** equivale a aprobacion corporativa: quien aprueba/rechaza/pide info es el core de facturacion via `pagador_reviews`.
+- Jev **no** decide aprobaciones: marca opciones de baja calidad y aporta el motivo; el filtro de presupuesto es determinista del backend.
+- Nunca se ejecuta `rappi place-order`.
+- Si el empleado no declara presupuesto, se busca sin tope.
 
 ## Estructura
 
 ```
 agent-backend/
   app/
-    config.py            # configuracion via .env (pydantic-settings)
-    logging_setup.py     # logs estructurados (structlog, JSON)
-    models/              # Pydantic: dominio de compra y webhooks Kapso
-    domain/policies.py   # reglas duras obligatorias (backend siempre refuerza)
-    services/            # kapso, gemini, rappi, supabase, jev, billing, orquestador
-    routers/             # /health y /webhooks/kapso
-  supabase/migrations/   # SQL del esquema (conversations, purchase_requests, decisions, price_history, policies, audit_events)
+    config.py              # configuracion por .env (pydantic-settings)
+    logging_setup.py       # logs estructurados JSON (structlog)
+    models/                # Pydantic: dominio de compra, webhooks Kapso
+    domain/policies.py     # regla de presupuesto total
+    services/              # kapso, gemini, rappi, supabase, jev, orquestador
+    routers/               # /health y /webhooks/kapso
+  flows/                   # WhatsApp Flow JSON (requiere numero de produccion)
+  supabase/migrations/     # 0001 (agente) y 0002 (esquema pagador_* del core)
   tests/
+  start.sh                 # arranque con dos modos
 ```
 
-## Flujo implementado (maquina de estados)
-
-1. Empleado escribe su solicitud -> Gemini extrae requisitos -> se confirman por botones.
-2. `req:buscar` -> Rappi busca -> politicas duras (tope por pedido, tope diario) -> Jev evalua con historico + politicas -> top 3 opciones por lista interactiva.
-3. Empleado elige -> revalidacion obligatoria contra politicas -> agregar carrito -> preview checkout (sin pago) -> registro enviado al core de facturacion.
-4. "Ninguna me convence" -> nueva vuelta de requisitos. Sin opciones aprobadas -> estado ESCALADA.
-
-## Como correr
+## Arranque
 
 ```bash
-# 1. Backend
-cd agent-backend
-cp .env.example .env   # y completar las credenciales
-uv sync
-uv run pytest          # pruebas unitarias
-uv run uvicorn app.main:app --port 8000
+# TODO LOCAL (rappi + backend local + tunnel + webhook Kapso)
+./start.sh
 
-# 2. Rappi CLI (otra terminal)
-bun add -g @crafter/rappi-cli
-rappi login            # autenticacion manual una vez
-rappi server           # REST API en http://127.0.0.1:3100
-
-# 3. Exponer el webhook publicamente (ej: ngrok)
-ngrok http 8000
-# Configurar el webhook en Kapso apuntando a <url>/webhooks/kapso
-# y pegar el mismo secreto en KAPSO_WEBHOOK_SECRET
+# HIBRIDO (rappi + tunnel de rappi local; backend en Railway)
+./start.sh --hybrid
 ```
+
+Ambos modos son idempotentes: reutilizan procesos ya vivos y solo actualizan
+webhook/variables cuando la URL del tunnel cambia.
+
+Prerequisitos: Bun (`bun add -g @crafter/rappi-cli`), `railway login`,
+`cloudflared`, token de Rappi vigente (`rappi whoami`).
 
 ## Seguridad del webhook
 
-Kapso firma cada webhook con HMAC SHA256 (`X-Webhook-Signature`) usando `KAPSO_WEBHOOK_SECRET`. El endpoint verifica la firma con comparacion timing-safe sobre el body crudo y deduplica con `X-Idempotency-Key`.
+Kapso firma cada webhook con HMAC SHA256 (`X-Webhook-Signature`) usando
+`KAPSO_WEBHOOK_SECRET`. El endpoint verifica con comparacion timing-safe sobre
+el body crudo y deduplica con `X-Idempotency-Key`.
 
-## Contratos pendientes
+## Sistema pagador (core de facturacion)
 
-- **Jev**: se asume `POST {JEV_BASE_URL}/evaluate` con `{solicitud, opciones, historico_precios, politicas}` devolviendo `{"evaluaciones": [...]}`. Ajustar cuando llegue la documentacion del servicio.
-- **Core de facturacion**: se asume `POST {BILLING_CORE_BASE_URL}/purchase-records`. Ajustar con la doc final.
-- **Rappi REST**: paths corregidos contra la doc oficial del repo (`/api/search?q=`, `/api/cart/add`, `GET /api/checkout`). El body de `cart/add` y el shape de respuestas se verifican contra el server vivo tras `rappi login`.
-- Formulario interactivo: el MVP usa botones/listas + extraccion por LLM. WhatsApp Flows nativo queda como mejora.
+Esquema en `supabase/migrations/0002_mig.sql` (solo `pagador_*`):
 
-## Notas
+- Nuestro backend inserta en `pagador_subjects` via `pagador_save_writes`
+  (`kind: "purchase"`, `amount.amountMinor`, payload con opcion, carrito y
+  checkout preview) + evento en `pagador_audit_events`. Ese es el fin de
+  nuestro alcance.
+- El core consume los subjects y registra su decision en `pagador_reviews`
+  (`approved` / `rejected` / `info_requested`), append-only con triggers.
+- `PAGADOR_ORG_ID=tokengate` en el `.env`.
 
-- Jev NO puede aprobar una opcion que viole una regla dura; la aceptacion del empleado nunca sustituye la aprobacion corporativa.
-- Nunca se ejecuta `rappi place-order`.
-- Ejecutar `supabase/migrations/0001_init.sql` en el SQL Editor de Supabase antes de arrancar.
+## Contratos pendientes / limitaciones
+
+- WhatsApp Flows: implementado tras feature flag (`KAPSO_FLOW_ID_REQUISITOS`),
+  requiere numero de produccion (el sandbox de Kapso no soporta Flows).
+- Un solo producto por pedido (N unidades del mismo). Carrito multi-producto
+  por persona queda como mejora.
+- Formulario interactivo: el MVP usa botones/listas + extraccion por LLM.
+
+## Notas de seguridad
+
+- El `.env` nunca se versiona (esta en `.gitignore` de raiz y del servicio).
+- El historial de git fue purgado con filter-branch y verificado con secret
+  scanning de GitHub (0 alertas).
+- Rotar las API keys (Kapso, Gemini, Supabase, Jev) tras el hackathon es
+  buena practica: estuvieron en commits locales aunque nunca en el remoto.
