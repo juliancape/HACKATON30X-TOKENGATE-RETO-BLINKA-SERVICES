@@ -84,8 +84,9 @@ class Orquestador:
             elif estado == EstadoSolicitud.ESPERANDO_SELECCION:
                 await self._fase_seleccion(conversacion_id, telefono, contenido, contexto)
             elif estado in (EstadoSolicitud.CHECKOUT_PREPARADO, EstadoSolicitud.COMPLETADA):
-                # Nuevo pedido: conservamos memoria pero limpiamos el pedido anterior
+                # Nuevo pedido: nueva solicitud; conservamos solo la memoria de gustos
                 contexto.pop("opciones_presentadas", None)
+                contexto.pop("solicitud_id", None)
                 self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.NUEVA, contexto)
                 await self._fase_requisitos(conversacion_id, telefono, contenido, contexto)
             else:
@@ -496,6 +497,7 @@ class Orquestador:
 
         solicitud_id = contexto.get("solicitud_id") or conversacion_id
         registro = {
+            "solicitud_id": solicitud_id,
             "conversacion_id": conversacion_id,
             "telefono_empleado": telefono,
             "opcion_elegida": opcion,
@@ -507,18 +509,25 @@ class Orquestador:
         }
         # Insertar la compra como subject del sistema pagador (blinka):
         # el core de facturacion es quien aprueba/rechaza via pagador_reviews.
+        # Cada pedido genera un subject NUEVO (id uuid propio) con la solicitud
+        # como referencia, para que pedidos repetidos no choquen por PK.
+        import uuid as uuid_mod
+
         org_id = self.settings.pagador_org_id
+        subject_id = str(uuid_mod.uuid4())
+        insertado = False
         try:
             self.repo.insertar_subject_compra(
-                subject_id=solicitud_id,
+                subject_id=subject_id,
                 org_id=org_id,
-                referencia=f"compra-{conversacion_id[:8]}",
+                referencia=solicitud_id,
                 total_cop=total,
                 payload=registro,
             )
+            insertado = True
         except Exception as exc:  # noqa: BLE001 - el insert al pagador no debe tumbar el flujo
             log.error("pagador_insert_fallo", error=str(exc))
-            self.repo.registrar_auditoria(conversacion_id, "pagador_insert_fallo", {"error": str(exc)})
+            self.repo.registrar_auditoria(conversacion_id, "pagador_insert_fallo", {"error": str(exc), "subject_id": subject_id})
 
         self.repo.guardar_conversacion(conversacion_id, EstadoSolicitud.CHECKOUT_PREPARADO, contexto)
         if contexto.get("solicitud_id"):
@@ -526,12 +535,19 @@ class Orquestador:
         self.repo.registrar_auditoria(
             conversacion_id, "checkout_preparado", {"opcion_id": opcion_id, "cantidad": cantidad, "total": total}
         )
-        await self.kapso.enviar_texto(
-            telefono,
-            "🎉 *Pedido preparado* ✅\n\n"
-            f"🍔 {cantidad} x {opcion['producto_nombre']}\n"
-            f"💰 Total: *${total:,} COP*\n\n"
-            "Tu solicitud fue enviada para revision corporativa.\n"
-            "🛒 Tu pedido queda listo en el carrito de Rappi.\n\n"
-            "Escribe cuando quieras hacer otro pedido 🍽️",
-        )
+        if insertado:
+            await self.kapso.enviar_texto(
+                telefono,
+                "🎉 *Pedido preparado* ✅\n\n"
+                f"🍔 {cantidad} x {opcion['producto_nombre']}\n"
+                f"💰 Total: *${total:,} COP*\n\n"
+                "Tu solicitud fue enviada para revision corporativa.\n"
+                "🛒 Tu pedido queda listo en el carrito de Rappi.\n\n"
+                "Escribe cuando quieras hacer otro pedido 🍽️",
+            )
+        else:
+            await self.kapso.enviar_texto(
+                telefono,
+                "⚠️ Tu pedido quedo listo en el carrito de Rappi, pero no pudimos registrar la factura "
+                "en el sistema corporativo. Intenta de nuevo en unos minutos.",
+            )
